@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Folder Search Lite</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <header class="topbar">
+        <div>
+          <h1>Folder Search Lite</h1>
+          <p id="statusText" class="status-text">待機中</p>
+        </div>
+        <nav class="tabs" aria-label="ビュー">
+          <button class="tab-button active" data-tab="search">検索</button>
+          <button class="tab-button" data-tab="history">履歴</button>
+          <button class="tab-button" data-tab="bookmarks">ブックマーク</button>
+        </nav>
+      </header>
+
+      <section id="searchPanel" class="panel active" aria-labelledby="searchTab">
+        <form id="searchForm" class="search-form">
+          <label class="field path-field">
+            <span>フォルダ</span>
+            <div class="input-row">
+              <input id="rootPath" name="rootPath" type="text" autocomplete="off" placeholder="C:\Projects\sample" />
+              <button id="browseButton" class="secondary" type="button">参照</button>
+            </div>
+          </label>
+
+          <label class="field">
+            <span>文字列</span>
+            <input id="query" name="query" type="text" autocomplete="off" placeholder="検索語" />
+          </label>
+
+          <label class="field">
+            <span>拡張子</span>
+            <input id="extensions" name="extensions" type="text" autocomplete="off" placeholder=".go, .txt" />
+          </label>
+
+          <div class="controls">
+            <label><input id="includeFileNames" type="checkbox" checked />ファイル名</label>
+            <label><input id="includeFolderNames" type="checkbox" checked />フォルダ名</label>
+            <label><input id="includeContents" type="checkbox" />内容</label>
+            <label><input id="includeOfficeDocuments" type="checkbox" checked />Office文書</label>
+            <label><input id="caseSensitive" type="checkbox" />大小区別</label>
+          </div>
+
+          <label class="field compact">
+            <span>上限</span>
+            <input id="maxResults" type="number" min="1" max="5000" value="500" />
+          </label>
+
+          <div class="actions">
+            <button id="searchButton" type="submit">検索</button>
+            <button id="bookmarkCurrentButton" class="secondary" type="button" disabled>保存</button>
+          </div>
+        </form>
+
+        <div class="summary-row">
+          <span id="resultSummary">0 件</span>
+          <span id="scanSummary">0 item</span>
+        </div>
+
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>種別</th>
+                <th>名前</th>
+                <th>相対パス</th>
+                <th>一致</th>
+                <th>サイズ</th>
+                <th>更新</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="resultsBody"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="historyPanel" class="panel" aria-labelledby="historyTab">
+        <div class="section-toolbar">
+          <h2>履歴</h2>
+          <button id="clearHistoryButton" class="secondary danger" type="button">クリア</button>
+        </div>
+        <div id="historyList" class="saved-list"></div>
+      </section>
+
+      <section id="bookmarksPanel" class="panel" aria-labelledby="bookmarksTab">
+        <div class="section-toolbar">
+          <h2>ブックマーク</h2>
+        </div>
+        <div id="bookmarkList" class="saved-list"></div>
+      </section>
+    </main>
+
+    <script src="./main.js"></script>
+  </body>
+</html>

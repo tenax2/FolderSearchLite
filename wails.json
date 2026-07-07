@@ -1,0 +1,19 @@
+{
+  "$schema": "https://wails.io/schemas/config.v2.json",
+  "version": "2",
+  "name": "folder-search-lite",
+  "assetdir": "frontend/dist",
+  "frontend:install": "",
+  "frontend:build": "",
+  "frontend:dev:watcher": "",
+  "frontend:dev:serverUrl": "",
+  "wailsjsdir": "./frontend/wailsjs",
+  "outputfilename": "FolderSearchLite",
+  "info": {
+    "companyName": "Local",
+    "productName": "Folder Search Lite",
+    "productVersion": "0.1.0",
+    "copyright": "",
+    "comments": "Lightweight folder search desktop app"
+  }
+}

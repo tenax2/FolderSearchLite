@@ -1,0 +1,6 @@
+build/bin/
+build/windows/*syso
+frontend/wailsjs/
+*.exe
+*.log
+*.tmp
