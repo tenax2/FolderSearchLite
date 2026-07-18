@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -12,6 +13,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 const (
@@ -55,6 +57,7 @@ type SearchResponse struct {
 	TotalVisited       int            `json:"totalVisited"`
 	FilesScanned       int            `json:"filesScanned"`
 	DirectoriesScanned int            `json:"directoriesScanned"`
+	UnreadableItems    int            `json:"unreadableItems"`
 	LimitReached       bool           `json:"limitReached"`
 	Results            []SearchResult `json:"results"`
 }
@@ -70,8 +73,15 @@ type HistoryEntry struct {
 }
 
 func RunSearch(request SearchRequest) (SearchResponse, HistoryEntry, error) {
+	return RunSearchContext(context.Background(), request)
+}
+
+func RunSearchContext(ctx context.Context, request SearchRequest) (SearchResponse, HistoryEntry, error) {
 	started := time.Now()
 	request = normalizeRequest(request)
+	if err := ctx.Err(); err != nil {
+		return SearchResponse{}, HistoryEntry{}, err
+	}
 
 	rootInfo, err := os.Stat(request.RootPath)
 	if err != nil {
@@ -96,7 +106,14 @@ func RunSearch(request SearchRequest) (SearchResponse, HistoryEntry, error) {
 	}
 
 	walkErr := filepath.WalkDir(request.RootPath, func(path string, dirEntry fs.DirEntry, walkErr error) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if walkErr != nil {
+			response.UnreadableItems++
+			if dirEntry != nil && dirEntry.IsDir() {
+				return fs.SkipDir
+			}
 			return nil
 		}
 		if path == request.RootPath {
@@ -105,6 +122,7 @@ func RunSearch(request SearchRequest) (SearchResponse, HistoryEntry, error) {
 
 		info, err := dirEntry.Info()
 		if err != nil {
+			response.UnreadableItems++
 			return nil
 		}
 
@@ -139,7 +157,13 @@ func RunSearch(request SearchRequest) (SearchResponse, HistoryEntry, error) {
 		}
 
 		if !isDirectory && request.IncludeContents && request.Query != "" {
-			matched, contentPreview := scanFileContent(path, ext, needle, request.CaseSensitive, request.IncludeOfficeDocuments)
+			matched, contentPreview, scanErr := scanFileContent(ctx, path, ext, needle, request.CaseSensitive, request.IncludeOfficeDocuments)
+			if scanErr != nil {
+				if errors.Is(scanErr, context.Canceled) {
+					return scanErr
+				}
+				response.UnreadableItems++
+			}
 			if matched {
 				matchedBy = append(matchedBy, "content")
 				preview = contentPreview
@@ -271,42 +295,54 @@ func matchesQuery(value string, needle string, caseSensitive bool) bool {
 	return strings.Contains(value, needle)
 }
 
-func scanFileContent(path string, ext string, needle string, caseSensitive bool, includeOfficeDocuments bool) (bool, string) {
+func scanFileContent(ctx context.Context, path string, ext string, needle string, caseSensitive bool, includeOfficeDocuments bool) (bool, string, error) {
 	if includeOfficeDocuments && isModernOfficeExtension(ext) {
-		return scanOfficeContent(path, ext, needle, caseSensitive)
+		return scanOfficeContent(ctx, path, ext, needle, caseSensitive)
 	}
 
 	file, err := os.Open(path)
 	if err != nil {
-		return false, ""
+		return false, "", err
 	}
 	defer file.Close()
 
 	textFile, err := isLikelyText(file)
-	if err != nil || !textFile {
-		return false, ""
+	if err != nil {
+		return false, "", err
+	}
+	if !textFile {
+		return false, "", nil
 	}
 	if _, err := file.Seek(0, io.SeekStart); err != nil {
-		return false, ""
+		return false, "", err
 	}
 
-	scanner := bufio.NewScanner(file)
-	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
-
+	reader := bufio.NewReaderSize(file, 64*1024)
 	lineNumber := 0
-	for scanner.Scan() {
-		lineNumber++
-		line := scanner.Text()
-		candidate := line
-		if !caseSensitive {
-			candidate = strings.ToLower(candidate)
+	for {
+		if err := ctx.Err(); err != nil {
+			return false, "", err
 		}
-		if strings.Contains(candidate, needle) {
-			return true, fmt.Sprintf("L%d: %s", lineNumber, compact(line, 220))
+
+		line, readErr := reader.ReadString('\n')
+		if len(line) > 0 {
+			lineNumber++
+			candidate := line
+			if !caseSensitive {
+				candidate = strings.ToLower(candidate)
+			}
+			if strings.Contains(candidate, needle) {
+				return true, fmt.Sprintf("L%d: %s", lineNumber, compactMatch(line, needle, caseSensitive, 220)), nil
+			}
+		}
+
+		if errors.Is(readErr, io.EOF) {
+			return false, "", nil
+		}
+		if readErr != nil {
+			return false, "", readErr
 		}
 	}
-
-	return false, ""
 }
 
 func isLikelyText(file *os.File) (bool, error) {
@@ -329,6 +365,45 @@ func compact(value string, limit int) string {
 
 	runes := []rune(value)
 	return string(runes[:limit]) + "..."
+}
+
+func compactMatch(value string, needle string, caseSensitive bool, limit int) string {
+	value = strings.Join(strings.Fields(value), " ")
+	runes := []rune(value)
+	if len(runes) <= limit {
+		return value
+	}
+
+	candidate := value
+	if !caseSensitive {
+		candidate = strings.ToLower(candidate)
+	}
+	matchByte := strings.Index(candidate, needle)
+	if matchByte < 0 {
+		return compact(value, limit)
+	}
+
+	matchRune := utf8.RuneCountInString(candidate[:matchByte])
+	needleRunes := len([]rune(needle))
+	contextRunes := limit - minInt(needleRunes, limit)
+	start := matchRune - contextRunes/2
+	if start < 0 {
+		start = 0
+	}
+	end := start + limit
+	if end > len(runes) {
+		end = len(runes)
+		start = end - limit
+	}
+
+	preview := string(runes[start:end])
+	if start > 0 {
+		preview = "..." + preview
+	}
+	if end < len(runes) {
+		preview += "..."
+	}
+	return preview
 }
 
 func resultKind(isDirectory bool) string {

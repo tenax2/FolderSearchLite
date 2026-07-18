@@ -13,14 +13,14 @@
           <h1>Folder Search Lite</h1>
           <p id="statusText" class="status-text">待機中</p>
         </div>
-        <nav class="tabs" aria-label="ビュー">
-          <button class="tab-button active" data-tab="search">検索</button>
-          <button class="tab-button" data-tab="history">履歴</button>
-          <button class="tab-button" data-tab="bookmarks">ブックマーク</button>
+        <nav class="tabs" role="tablist" aria-label="ビュー">
+          <button id="searchTab" class="tab-button active" type="button" role="tab" aria-selected="true" aria-controls="searchPanel" data-tab="search">検索</button>
+          <button id="historyTab" class="tab-button" type="button" role="tab" aria-selected="false" aria-controls="historyPanel" data-tab="history">履歴</button>
+          <button id="bookmarksTab" class="tab-button" type="button" role="tab" aria-selected="false" aria-controls="bookmarksPanel" data-tab="bookmarks">ブックマーク</button>
         </nav>
       </header>
 
-      <section id="searchPanel" class="panel active" aria-labelledby="searchTab">
+      <section id="searchPanel" class="panel active" role="tabpanel" aria-labelledby="searchTab">
         <form id="searchForm" class="search-form">
           <label class="field path-field">
             <span>フォルダ</span>
@@ -30,12 +30,12 @@
             </div>
           </label>
 
-          <label class="field">
+          <label class="field query-field">
             <span>文字列</span>
             <input id="query" name="query" type="text" autocomplete="off" placeholder="検索語" />
           </label>
 
-          <label class="field">
+          <label class="field extensions-field">
             <span>拡張子</span>
             <input id="extensions" name="extensions" type="text" autocomplete="off" placeholder=".go, .txt" />
           </label>
@@ -48,13 +48,14 @@
             <label><input id="caseSensitive" type="checkbox" />大小区別</label>
           </div>
 
-          <label class="field compact">
+          <label class="field compact max-results-field">
             <span>上限</span>
             <input id="maxResults" type="number" min="1" max="5000" value="500" />
           </label>
 
           <div class="actions">
             <button id="searchButton" type="submit">検索</button>
+            <button id="cancelSearchButton" class="secondary" type="button" disabled>中断</button>
             <button id="bookmarkCurrentButton" class="secondary" type="button" disabled>保存</button>
           </div>
         </form>
@@ -68,13 +69,38 @@
           <table>
             <thead>
               <tr>
-                <th>種別</th>
-                <th>名前</th>
-                <th>相対パス</th>
-                <th>一致</th>
-                <th>サイズ</th>
-                <th>更新</th>
-                <th></th>
+                <th scope="col" aria-sort="none"><button class="sort-button" type="button" data-sort="kind">種別<span class="sort-indicator" aria-hidden="true">↕</span></button></th>
+                <th scope="col" aria-sort="none"><button class="sort-button" type="button" data-sort="name">名前<span class="sort-indicator" aria-hidden="true">↕</span></button></th>
+                <th scope="col" aria-sort="none"><button class="sort-button" type="button" data-sort="relativePath">相対パス<span class="sort-indicator" aria-hidden="true">↕</span></button></th>
+                <th scope="col" aria-sort="none"><button class="sort-button" type="button" data-sort="matchedBy">一致<span class="sort-indicator" aria-hidden="true">↕</span></button></th>
+                <th scope="col" aria-sort="none"><button class="sort-button" type="button" data-sort="size">サイズ<span class="sort-indicator" aria-hidden="true">↕</span></button></th>
+                <th scope="col" aria-sort="none"><button class="sort-button" type="button" data-sort="modifiedAt">更新<span class="sort-indicator" aria-hidden="true">↕</span></button></th>
+                <th scope="col"><span class="visually-hidden">操作</span></th>
+              </tr>
+              <tr class="filter-row">
+                <th>
+                  <label class="visually-hidden" for="kindFilter">種別で絞り込み</label>
+                  <select id="kindFilter" class="column-filter" data-filter="kind">
+                    <option value="">すべて</option>
+                    <option value="file">ファイル</option>
+                    <option value="folder">フォルダ</option>
+                  </select>
+                </th>
+                <th><label class="visually-hidden" for="nameFilter">名前で絞り込み</label><input id="nameFilter" class="column-filter" type="search" data-filter="name" placeholder="絞り込み" /></th>
+                <th><label class="visually-hidden" for="pathFilter">相対パスで絞り込み</label><input id="pathFilter" class="column-filter" type="search" data-filter="relativePath" placeholder="絞り込み" /></th>
+                <th>
+                  <label class="visually-hidden" for="matchFilter">一致箇所で絞り込み</label>
+                  <select id="matchFilter" class="column-filter" data-filter="matchedBy">
+                    <option value="">すべて</option>
+                    <option value="extension">拡張子</option>
+                    <option value="file-name">ファイル名</option>
+                    <option value="folder-name">フォルダ名</option>
+                    <option value="content">内容</option>
+                  </select>
+                </th>
+                <th><label class="visually-hidden" for="sizeFilter">サイズで絞り込み</label><input id="sizeFilter" class="column-filter" type="search" data-filter="size" placeholder="例: &gt;= 1 MB" /></th>
+                <th><label class="visually-hidden" for="modifiedFilter">更新日時で絞り込み</label><input id="modifiedFilter" class="column-filter" type="search" data-filter="modifiedAt" placeholder="日付・時刻" /></th>
+                <th><button id="clearFiltersButton" class="secondary clear-filters" type="button" disabled>解除</button></th>
               </tr>
             </thead>
             <tbody id="resultsBody"></tbody>
@@ -82,7 +108,7 @@
         </div>
       </section>
 
-      <section id="historyPanel" class="panel" aria-labelledby="historyTab">
+      <section id="historyPanel" class="panel" role="tabpanel" aria-labelledby="historyTab">
         <div class="section-toolbar">
           <h2>履歴</h2>
           <button id="clearHistoryButton" class="secondary danger" type="button">クリア</button>
@@ -90,7 +116,7 @@
         <div id="historyList" class="saved-list"></div>
       </section>
 
-      <section id="bookmarksPanel" class="panel" aria-labelledby="bookmarksTab">
+      <section id="bookmarksPanel" class="panel" role="tabpanel" aria-labelledby="bookmarksTab">
         <div class="section-toolbar">
           <h2>ブックマーク</h2>
         </div>

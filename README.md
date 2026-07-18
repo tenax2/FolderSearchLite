@@ -1,20 +1,20 @@
 # Folder Search Lite
 
-Go + Wails で作る軽量フォルダ検索デスクトップアプリの基盤です。
+Folder Search Lite は、Go と Wails で作る軽量なフォルダ検索デスクトップアプリです。
 
 ## 機能
 
-- フォルダパス指定
-- 配下のファイル・フォルダを再帰検索
-- 文字列、拡張子、ファイル名、フォルダ名、ファイル内容の検索
-- Word、Excel、PowerPoint の内容検索
-- 結果一覧表示
-- 検索履歴保存
-- ブックマーク保存
+- 指定したフォルダ配下を再帰検索する
+- 文字列、拡張子、ファイル名、フォルダ名、ファイル内容で絞り込む
+- Word、Excel、PowerPoint の内容を検索する
+- 実行中の検索を中断する
+- 検索結果と読み取りに失敗した項目数を表示する
+- 検索履歴とブックマークを保存する
 
 ## セットアップ
 
-このプロジェクトで解決されている Wails v2.13.0 は Go 1.25.0 以上を要求します。Wails CLI の導入後に `wails doctor` で環境を確認してください。
+このプロジェクトが使用する Wails v2.13.0 は、Go 1.25.0 以上を要求します。
+Wails CLI の導入後に `wails doctor` で環境を確認してください。
 
 ```powershell
 go version
@@ -23,12 +23,13 @@ go install github.com/wailsapp/wails/v2/cmd/wails@v2.13.0
 wails doctor
 ```
 
-このプロジェクトはフロントエンドを `frontend/dist` に直接配置しているため、React/Vue/Vite などの追加依存はありません。
+フロントエンドは `frontend/dist` に直接配置しています。
+React、Vue、Vite などの追加依存はありません。
 
 ## 起動
 
 ```powershell
-cd C:\Users\tenas\Documents\Codex\2026-07-08\new-chat\outputs\folder-search-lite
+cd FolderSearchLite
 go mod tidy
 wails dev
 ```
@@ -41,11 +42,19 @@ wails build
 
 生成物は通常 `build/bin` 配下に出力されます。
 
+## テスト
+
+```powershell
+go test ./...
+go vet ./...
+node --check frontend/dist/main.js
+```
+
 ## 保存先
 
-履歴とブックマークは OS のユーザー設定フォルダ配下に JSON で保存します。
+履歴とブックマークは、OS のユーザー設定フォルダ配下に JSON で保存します。
 
-Windows 例:
+Windows での保存先は次のとおりです。
 
 ```text
 %AppData%\FolderSearchLite\state.json
@@ -53,31 +62,24 @@ Windows 例:
 
 ## Office 文書検索
 
-内容検索で対応している Office 文書は、Office Open XML 形式の以下です。
+内容検索では、次の Office Open XML 形式に対応しています。
 
-- Word: `.docx`, `.docm`, `.dotx`, `.dotm`
-- Excel: `.xlsx`, `.xlsm`, `.xltx`, `.xltm`
-- PowerPoint: `.pptx`, `.pptm`, `.ppsx`, `.ppsm`, `.potx`, `.potm`
+- **Word**：`.docx`, `.docm`, `.dotx`, `.dotm`
+- **Excel**：`.xlsx`, `.xlsm`, `.xltx`, `.xltm`
+- **PowerPoint**：`.pptx`, `.pptm`, `.ppsx`, `.ppsm`, `.potx`, `.potm`
 
-古いバイナリ形式の `.doc`, `.xls`, `.ppt` などは、Office 文書の対象拡張子としては扱いますが、内容検索は対象外です。
+古いバイナリ形式の `.doc`, `.xls`, `.ppt` などは、Office 文書の対象拡張子として扱います。
+ただし、これらの形式の内容は検索しません。
 
-## 内容検索サイズ制限について
+## 内容検索の制約
 
-現在は内容検索時のファイルサイズ制限を設けていません。
+内容検索はファイルサイズと一行の長さに上限を設けていません。
+この仕様により、大きいログ、CSV、仕様書、Office 文書も検索対象にできます。
 
-メリット:
+一方で、巨大なファイルや大量の Office 文書を検索すると、処理時間とメモリ使用量が増えます。
+ネットワークドライブやクラウド同期フォルダでは、読み取り待ちが長くなる場合もあります。
+長時間かかる検索は、画面の「中断」ボタンから停止できます。
 
-- 大きいログ、CSV、仕様書、Office 文書も検索対象から漏れにくくなります。
-- 利用者がサイズ上限を意識せずに検索できます。
-- 「存在するはずなのに見つからない」という取りこぼしを減らせます。
-
-デメリット:
-
-- 巨大ファイルや大量の Office 文書があるフォルダでは検索時間が長くなります。
-- ZIP/XML 展開を伴う Office 文書では CPU とメモリ使用量が増える場合があります。
-- ネットワークドライブやクラウド同期フォルダでは、読み取り待ちで UI が重く感じられることがあります。
-- 破損ファイルや特殊な形式のファイルは読み飛ばされるため、完全な全文検索エンジンほどの網羅性はありません。
-
-## 補足
-
-プレーンテキストは行単位で読み、バイナリらしいファイルは読み飛ばします。Office Open XML 文書は ZIP 内の XML テキストだけを読み取ります。
+権限不足、破損、読み取りエラーが発生した項目は検索を止めずに除外し、その件数を画面に表示します。
+プレーンテキストかどうかは、先頭部分に NUL 文字が含まれるかで判定します。
+Office Open XML 文書は、ZIP 内の検索対象 XML だけを読み取ります。

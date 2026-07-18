@@ -17,10 +17,10 @@ func main() {
 
 	err := wails.Run(&options.App{
 		Title:     "Folder Search Lite",
-		Width:     1180,
-		Height:    760,
-		MinWidth:  920,
-		MinHeight: 620,
+		Width:     1440,
+		Height:    900,
+		MinWidth:  960,
+		MinHeight: 640,
 		AssetServer: &assetserver.Options{
 			Assets: assets,
 		},

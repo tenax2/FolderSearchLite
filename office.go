@@ -2,6 +2,7 @@ package main
 
 import (
 	"archive/zip"
+	"context"
 	"encoding/xml"
 	"fmt"
 	"io"
@@ -30,14 +31,19 @@ func isModernOfficeExtension(ext string) bool {
 	}
 }
 
-func scanOfficeContent(filePath string, ext string, needle string, caseSensitive bool) (bool, string) {
+func scanOfficeContent(ctx context.Context, filePath string, ext string, needle string, caseSensitive bool) (bool, string, error) {
 	reader, err := zip.OpenReader(filePath)
 	if err != nil {
-		return false, ""
+		return false, "", err
 	}
 	defer reader.Close()
 
+	var firstErr error
 	for _, file := range reader.File {
+		if err := ctx.Err(); err != nil {
+			return false, "", err
+		}
+
 		name := path.Clean(strings.ReplaceAll(file.Name, "\\", "/"))
 		if !shouldScanOfficePart(ext, name) {
 			continue
@@ -45,16 +51,22 @@ func scanOfficeContent(filePath string, ext string, needle string, caseSensitive
 
 		part, err := file.Open()
 		if err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
 			continue
 		}
-		matched, preview := scanXMLText(part, needle, caseSensitive)
+		matched, preview, scanErr := scanXMLText(ctx, part, needle, caseSensitive)
 		_ = part.Close()
 		if matched {
-			return true, fmt.Sprintf("%s: %s", officePartLabel(name), preview)
+			return true, fmt.Sprintf("%s: %s", officePartLabel(name), preview), nil
+		}
+		if scanErr != nil && firstErr == nil {
+			firstErr = scanErr
 		}
 	}
 
-	return false, ""
+	return false, "", firstErr
 }
 
 func shouldScanOfficePart(ext string, name string) bool {
@@ -85,17 +97,21 @@ func shouldScanOfficePart(ext string, name string) bool {
 	}
 }
 
-func scanXMLText(reader io.Reader, needle string, caseSensitive bool) (bool, string) {
+func scanXMLText(ctx context.Context, reader io.Reader, needle string, caseSensitive bool) (bool, string, error) {
 	decoder := xml.NewDecoder(reader)
 	var buffer strings.Builder
 
 	for {
+		if err := ctx.Err(); err != nil {
+			return false, "", err
+		}
+
 		token, err := decoder.Token()
 		if err == io.EOF {
-			return false, ""
+			return false, "", nil
 		}
 		if err != nil {
-			return false, ""
+			return false, "", err
 		}
 
 		charData, ok := token.(xml.CharData)
@@ -118,7 +134,7 @@ func scanXMLText(reader io.Reader, needle string, caseSensitive bool) (bool, str
 			candidate = strings.ToLower(candidate)
 		}
 		if strings.Contains(candidate, needle) {
-			return true, compact(segment, 220)
+			return true, compactMatch(segment, needle, caseSensitive, 220), nil
 		}
 		if len([]rune(segment)) > officePreviewWindow {
 			buffer.Reset()

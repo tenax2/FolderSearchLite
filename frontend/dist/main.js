@@ -4,7 +4,25 @@ const state = {
   bookmarks: [],
   currentHistoryId: "",
   searching: false,
+  results: [],
+  filters: {
+    kind: "",
+    name: "",
+    relativePath: "",
+    matchedBy: "",
+    size: "",
+    modifiedAt: "",
+  },
+  sort: {
+    key: "",
+    direction: "asc",
+  },
 };
+
+const resultCollator = new Intl.Collator("ja", {
+  numeric: true,
+  sensitivity: "base",
+});
 
 const elements = {
   statusText: document.querySelector("#statusText"),
@@ -26,10 +44,14 @@ const elements = {
   maxResults: document.querySelector("#maxResults"),
   browseButton: document.querySelector("#browseButton"),
   searchButton: document.querySelector("#searchButton"),
+  cancelSearchButton: document.querySelector("#cancelSearchButton"),
   bookmarkCurrentButton: document.querySelector("#bookmarkCurrentButton"),
   resultSummary: document.querySelector("#resultSummary"),
   scanSummary: document.querySelector("#scanSummary"),
   resultsBody: document.querySelector("#resultsBody"),
+  sortButtons: [...document.querySelectorAll(".sort-button")],
+  filterControls: [...document.querySelectorAll(".column-filter")],
+  clearFiltersButton: document.querySelector("#clearFiltersButton"),
   historyList: document.querySelector("#historyList"),
   bookmarkList: document.querySelector("#bookmarkList"),
   clearHistoryButton: document.querySelector("#clearHistoryButton"),
@@ -55,7 +77,12 @@ function setSearching(searching) {
   state.searching = searching;
   elements.searchButton.disabled = searching;
   elements.browseButton.disabled = searching;
+  elements.cancelSearchButton.disabled = !searching;
   elements.searchButton.textContent = searching ? "検索中" : "検索";
+}
+
+function errorMessage(error) {
+  return error?.message || String(error || "不明なエラーが発生しました");
 }
 
 function parseExtensions(value) {
@@ -107,11 +134,15 @@ async function refreshSavedLists() {
     renderHistory();
     renderBookmarks();
   } catch (error) {
-    setStatus(error.message);
+    setStatus(errorMessage(error));
   }
 }
 
 async function runSearch(request) {
+  if (state.searching) {
+    setStatus("実行中の検索を中断してから再検索してください");
+    return;
+  }
   if (!request.rootPath) {
     setStatus("フォルダを入力してください");
     return;
@@ -127,30 +158,46 @@ async function runSearch(request) {
     renderResults(response);
     await refreshSavedLists();
     elements.bookmarkCurrentButton.disabled = !state.currentHistoryId;
-    const limitText = response.limitReached ? " / 上限到達" : "";
-    setStatus(`${response.results.length} 件 / ${response.durationMs} ms${limitText}`);
+    const details = [];
+    if (response.limitReached) {
+      details.push("上限到達");
+    }
+    if (response.unreadableItems > 0) {
+      details.push(`読み取り失敗 ${response.unreadableItems} 件`);
+    }
+    const detailText = details.length ? ` / ${details.join(" / ")}` : "";
+    setStatus(`${response.results.length} 件 / ${response.durationMs} ms${detailText}`);
   } catch (error) {
-    setStatus(error.message);
+    setStatus(errorMessage(error));
   } finally {
     setSearching(false);
   }
 }
 
 function renderResults(response) {
-  elements.resultSummary.textContent = `${response.results.length.toLocaleString()} 件`;
+  state.results = Array.isArray(response.results) ? response.results : [];
   elements.scanSummary.textContent = `${response.totalVisited.toLocaleString()} item / ${response.filesScanned.toLocaleString()} files / ${response.directoriesScanned.toLocaleString()} folders`;
+  renderResultRows();
+}
+
+function renderResultRows() {
+  const results = getVisibleResults();
+  const hasActiveFilters = Object.values(state.filters).some(Boolean);
+  elements.resultSummary.textContent = hasActiveFilters
+    ? `${results.length.toLocaleString()} / ${state.results.length.toLocaleString()} 件`
+    : `${state.results.length.toLocaleString()} 件`;
   elements.resultsBody.innerHTML = "";
 
-  if (!response.results.length) {
+  if (!results.length) {
     const row = document.createElement("tr");
-    row.innerHTML = `<td colspan="7" class="empty">結果なし</td>`;
+    row.innerHTML = `<td colspan="7" class="empty">${state.results.length ? "フィルター条件に一致する結果なし" : "結果なし"}</td>`;
     elements.resultsBody.append(row);
     return;
   }
 
-  for (const result of response.results) {
+  for (const result of results) {
     const row = document.createElement("tr");
-    const matches = result.matchedBy.map((item) => `<span class="match-pill">${escapeHtml(matchLabel(item))}</span>`).join("");
+    const matches = (result.matchedBy || []).map((item) => `<span class="match-pill">${escapeHtml(matchLabel(item))}</span>`).join("");
     row.innerHTML = `
       <td><span class="kind-pill ${result.kind}">${result.kind === "folder" ? "フォルダ" : "ファイル"}</span></td>
       <td class="name-cell truncate">${escapeHtml(result.name)}</td>
@@ -162,6 +209,112 @@ function renderResults(response) {
     `;
     elements.resultsBody.append(row);
   }
+}
+
+function getVisibleResults() {
+  const results = state.results.filter((result) => {
+    if (state.filters.kind && result.kind !== state.filters.kind) {
+      return false;
+    }
+    if (!includesFilter(result.name, state.filters.name)) {
+      return false;
+    }
+    const pathText = `${result.relativePath || ""} ${result.preview || ""}`;
+    if (!includesFilter(pathText, state.filters.relativePath)) {
+      return false;
+    }
+    if (state.filters.matchedBy && !(result.matchedBy || []).includes(state.filters.matchedBy)) {
+      return false;
+    }
+    if (!matchesSizeFilter(result, state.filters.size)) {
+      return false;
+    }
+    return includesFilter(formatDate(result.modifiedAt), state.filters.modifiedAt);
+  });
+
+  if (!state.sort.key) {
+    return results;
+  }
+
+  const direction = state.sort.direction === "desc" ? -1 : 1;
+  return results.sort((left, right) => compareResults(left, right, state.sort.key) * direction);
+}
+
+function includesFilter(value, filter) {
+  return !filter || String(value ?? "").toLocaleLowerCase("ja").includes(filter.toLocaleLowerCase("ja"));
+}
+
+function matchesSizeFilter(result, filter) {
+  if (!filter) {
+    return true;
+  }
+  if (result.kind === "folder") {
+    return includesFilter("- フォルダ", filter);
+  }
+
+  const comparison = filter.trim().match(/^(<=|>=|<|>|=)?\s*(\d+(?:\.\d+)?)\s*(b|kb|mb|gb|tb)?$/i);
+  if (!comparison) {
+    return includesFilter(formatBytes(result.size), filter);
+  }
+
+  const units = { b: 1, kb: 1024, mb: 1024 ** 2, gb: 1024 ** 3, tb: 1024 ** 4 };
+  const operator = comparison[1] || "=";
+  const threshold = Number(comparison[2]) * units[(comparison[3] || "b").toLowerCase()];
+  return {
+    "<": result.size < threshold,
+    "<=": result.size <= threshold,
+    "=": result.size === threshold,
+    ">=": result.size >= threshold,
+    ">": result.size > threshold,
+  }[operator];
+}
+
+function compareResults(left, right, key) {
+  if (key === "size") {
+    return Number(left.size || 0) - Number(right.size || 0);
+  }
+  if (key === "modifiedAt") {
+    return dateValue(left.modifiedAt) - dateValue(right.modifiedAt);
+  }
+
+  const leftValue = resultSortValue(left, key);
+  const rightValue = resultSortValue(right, key);
+  return resultCollator.compare(leftValue, rightValue);
+}
+
+function resultSortValue(result, key) {
+  if (key === "kind") {
+    return result.kind === "folder" ? "フォルダ" : "ファイル";
+  }
+  if (key === "matchedBy") {
+    return (result.matchedBy || []).map(matchLabel).join(" ");
+  }
+  return String(result[key] ?? "");
+}
+
+function dateValue(value) {
+  const time = new Date(value).getTime();
+  return Number.isNaN(time) ? 0 : time;
+}
+
+function updateSortIndicators() {
+  for (const button of elements.sortButtons) {
+    const active = button.dataset.sort === state.sort.key;
+    const direction = active ? state.sort.direction : "";
+    button.closest("th").setAttribute("aria-sort", active ? (direction === "asc" ? "ascending" : "descending") : "none");
+    button.querySelector(".sort-indicator").textContent = active ? (direction === "asc" ? "▲" : "▼") : "↕";
+  }
+}
+
+function clearResultFilters() {
+  for (const key of Object.keys(state.filters)) {
+    state.filters[key] = "";
+  }
+  for (const control of elements.filterControls) {
+    control.value = "";
+  }
+  elements.clearFiltersButton.disabled = true;
+  renderResultRows();
 }
 
 function renderHistory() {
@@ -209,7 +362,9 @@ function renderSavedList(container, entries, options) {
 function switchTab(tabName) {
   state.activeTab = tabName;
   for (const button of elements.tabButtons) {
-    button.classList.toggle("active", button.dataset.tab === tabName);
+    const active = button.dataset.tab === tabName;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-selected", String(active));
   }
   for (const [name, panel] of Object.entries(elements.panels)) {
     panel.classList.toggle("active", name === tabName);
@@ -234,7 +389,7 @@ async function bookmarkHistory(id) {
     elements.bookmarkCurrentButton.disabled = true;
     setStatus("保存しました");
   } catch (error) {
-    setStatus(error.message);
+    setStatus(errorMessage(error));
   }
 }
 
@@ -244,17 +399,20 @@ async function removeBookmark(id) {
     await refreshSavedLists();
     setStatus("解除しました");
   } catch (error) {
-    setStatus(error.message);
+    setStatus(errorMessage(error));
   }
 }
 
 async function clearHistory() {
+  if (!window.confirm("検索履歴をすべて削除しますか？")) {
+    return;
+  }
   try {
     state.history = (await callBackend("ClearHistory")) || [];
     renderHistory();
     setStatus("履歴をクリアしました");
   } catch (error) {
-    setStatus(error.message);
+    setStatus(errorMessage(error));
   }
 }
 
@@ -340,12 +498,48 @@ elements.browseButton.addEventListener("click", async () => {
       setStatus("フォルダを選択しました");
     }
   } catch (error) {
-    setStatus(error.message);
+    setStatus(errorMessage(error));
   }
 });
 
 elements.bookmarkCurrentButton.addEventListener("click", bookmarkCurrent);
+elements.cancelSearchButton.addEventListener("click", async () => {
+  if (!state.searching) {
+    return;
+  }
+
+  elements.cancelSearchButton.disabled = true;
+  setStatus("検索を中断しています");
+  try {
+    await callBackend("CancelSearch");
+  } catch (error) {
+    setStatus(errorMessage(error));
+  }
+});
 elements.clearHistoryButton.addEventListener("click", clearHistory);
+elements.clearFiltersButton.addEventListener("click", clearResultFilters);
+
+elements.filterControls.forEach((control) => {
+  control.addEventListener("input", () => {
+    state.filters[control.dataset.filter] = control.value.trim();
+    elements.clearFiltersButton.disabled = !Object.values(state.filters).some(Boolean);
+    renderResultRows();
+  });
+});
+
+elements.sortButtons.forEach((button) => {
+  button.addEventListener("click", () => {
+    const key = button.dataset.sort;
+    if (state.sort.key === key) {
+      state.sort.direction = state.sort.direction === "asc" ? "desc" : "asc";
+    } else {
+      state.sort.key = key;
+      state.sort.direction = "asc";
+    }
+    updateSortIndicators();
+    renderResultRows();
+  });
+});
 
 elements.tabButtons.forEach((button) => {
   button.addEventListener("click", () => switchTab(button.dataset.tab));
@@ -363,7 +557,7 @@ document.addEventListener("click", async (event) => {
       await copyText(copyPath);
       setStatus("コピーしました");
     } catch (error) {
-      setStatus(error.message);
+      setStatus(errorMessage(error));
     }
     return;
   }
