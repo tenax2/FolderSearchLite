@@ -4,24 +4,43 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Folder Search Lite</title>
+    <script>
+      try {
+        const savedTheme = localStorage.getItem("folder-search-lite-theme");
+        document.documentElement.dataset.theme = savedTheme === "black" ? "black" : "light";
+      } catch {
+        document.documentElement.dataset.theme = "light";
+      }
+    </script>
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
+    <!-- アプリ全体は、固定ヘッダーと選択中パネルの2行グリッドで構成する。 -->
     <main class="app-shell">
+      <!-- ヘッダーはアプリ名、処理状態、検索・履歴・ブックマークのタブを保持する。 -->
       <header class="topbar">
         <div>
           <h1>Folder Search Lite</h1>
           <p id="statusText" class="status-text">待機中</p>
         </div>
-        <nav class="tabs" role="tablist" aria-label="ビュー">
-          <button id="searchTab" class="tab-button active" type="button" role="tab" aria-selected="true" aria-controls="searchPanel" data-tab="search">検索</button>
-          <button id="historyTab" class="tab-button" type="button" role="tab" aria-selected="false" aria-controls="historyPanel" data-tab="history">履歴</button>
-          <button id="bookmarksTab" class="tab-button" type="button" role="tab" aria-selected="false" aria-controls="bookmarksPanel" data-tab="bookmarks">ブックマーク</button>
-        </nav>
+        <div class="topbar-actions">
+          <div class="theme-switch" role="group" aria-label="画面テーマ">
+            <button class="theme-option" type="button" data-theme-option="light" aria-pressed="true">ライト</button>
+            <button class="theme-option" type="button" data-theme-option="black" aria-pressed="false">ブラック</button>
+          </div>
+          <nav class="tabs" role="tablist" aria-label="ビュー">
+            <button id="searchTab" class="tab-button active" type="button" role="tab" aria-selected="true" aria-controls="searchPanel" data-tab="search">検索</button>
+            <button id="historyTab" class="tab-button" type="button" role="tab" aria-selected="false" aria-controls="historyPanel" data-tab="history">履歴</button>
+            <button id="bookmarksTab" class="tab-button" type="button" role="tab" aria-selected="false" aria-controls="bookmarksPanel" data-tab="bookmarks">ブックマーク</button>
+          </nav>
+        </div>
       </header>
 
+      <!-- 検索パネルは、検索条件、走査統計、結果グリッドを上から順に配置する。 -->
       <section id="searchPanel" class="panel active" role="tabpanel" aria-labelledby="searchTab">
+        <!-- 送信時に各入力をSearchRequestへ変換する。ブラウザーの通常送信はmain.jsが抑止する。 -->
         <form id="searchForm" class="search-form">
+          <!-- 検索ルートは手入力とOS標準フォルダ選択の両方に対応する。 -->
           <label class="field path-field">
             <span>フォルダ</span>
             <div class="input-row">
@@ -40,6 +59,7 @@
             <input id="extensions" name="extensions" type="text" autocomplete="off" placeholder=".go, .txt" />
           </label>
 
+          <!-- 検索対象と照合方法を指定するフラグ群。名前検索はファイルとフォルダで独立する。 -->
           <div class="controls">
             <label><input id="includeFileNames" type="checkbox" checked />ファイル名</label>
             <label><input id="includeFolderNames" type="checkbox" checked />フォルダ名</label>
@@ -53,6 +73,7 @@
             <input id="maxResults" type="number" min="1" max="5000" value="500" />
           </label>
 
+          <!-- 検索中はmain.jsが検索・参照を無効化し、中断だけを有効化する。 -->
           <div class="actions">
             <button id="searchButton" type="submit">検索</button>
             <button id="cancelSearchButton" class="secondary" type="button" disabled>中断</button>
@@ -60,14 +81,17 @@
           </div>
         </form>
 
+        <!-- 左側は表示件数、右側はバックエンドが返す走査対象数を表示する。 -->
         <div class="summary-row">
           <span id="resultSummary">0 件</span>
           <span id="scanSummary">0 item</span>
         </div>
 
+        <!-- 結果グリッドは領域内でスクロールし、ヘッダーと列フィルターを上端へ固定する。 -->
         <div class="table-wrap">
           <table>
             <thead>
+              <!-- 見出しボタンは昇順・降順を切り替え、aria-sortもmain.jsが同期する。 -->
               <tr>
                 <th scope="col" aria-sort="none"><button class="sort-button" type="button" data-sort="kind">種別<span class="sort-indicator" aria-hidden="true">↕</span></button></th>
                 <th scope="col" aria-sort="none"><button class="sort-button" type="button" data-sort="name">名前<span class="sort-indicator" aria-hidden="true">↕</span></button></th>
@@ -77,6 +101,7 @@
                 <th scope="col" aria-sort="none"><button class="sort-button" type="button" data-sort="modifiedAt">更新<span class="sort-indicator" aria-hidden="true">↕</span></button></th>
                 <th scope="col"><span class="visually-hidden">操作</span></th>
               </tr>
+              <!-- フィルターは元の検索結果を変更せず、画面へ表示する行だけを絞り込む。 -->
               <tr class="filter-row">
                 <th>
                   <label class="visually-hidden" for="kindFilter">種別で絞り込み</label>
@@ -103,11 +128,13 @@
                 <th><button id="clearFiltersButton" class="secondary clear-filters" type="button" disabled>解除</button></th>
               </tr>
             </thead>
+            <!-- 検索結果行はエスケープ済み文字列からmain.jsが動的に生成する。 -->
             <tbody id="resultsBody"></tbody>
           </table>
         </div>
       </section>
 
+      <!-- 履歴パネルは、過去の検索条件の再実行、保存、全削除を提供する。 -->
       <section id="historyPanel" class="panel" role="tabpanel" aria-labelledby="historyTab">
         <div class="section-toolbar">
           <h2>履歴</h2>
@@ -116,6 +143,7 @@
         <div id="historyList" class="saved-list"></div>
       </section>
 
+      <!-- ブックマークパネルは、保存した検索条件の再実行と解除を提供する。 -->
       <section id="bookmarksPanel" class="panel" role="tabpanel" aria-labelledby="bookmarksTab">
         <div class="section-toolbar">
           <h2>ブックマーク</h2>
@@ -124,6 +152,7 @@
       </section>
     </main>
 
+    <!-- DOM構築後にイベント登録と保存済み一覧の初期取得を実行する。 -->
     <script src="./main.js"></script>
   </body>
 </html>

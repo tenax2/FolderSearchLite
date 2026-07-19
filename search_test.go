@@ -9,6 +9,8 @@ import (
 	"testing"
 )
 
+// TestRunSearchFindsMatchAfterOneMegabyteInSingleLine は、Scannerの既定上限を超える
+// 単一行でも末尾の検索語を検出し、一致箇所をプレビューへ残せることを確認する。
 func TestRunSearchFindsMatchAfterOneMegabyteInSingleLine(t *testing.T) {
 	t.Parallel()
 
@@ -45,6 +47,8 @@ func TestRunSearchFindsMatchAfterOneMegabyteInSingleLine(t *testing.T) {
 	}
 }
 
+// TestRunSearchContextStopsWhenCanceled は、走査開始前にキャンセルされた要求が
+// context.Canceledを失わず呼び出し元へ返すことを確認する。
 func TestRunSearchContextStopsWhenCanceled(t *testing.T) {
 	t.Parallel()
 
@@ -57,6 +61,8 @@ func TestRunSearchContextStopsWhenCanceled(t *testing.T) {
 	}
 }
 
+// TestRunSearchCountsUnreadableOfficeDocument は、ZIPとして壊れたOffice文書を
+// 検索全体の失敗にせず、読み取り失敗件数として報告することを確認する。
 func TestRunSearchCountsUnreadableOfficeDocument(t *testing.T) {
 	t.Parallel()
 
@@ -83,6 +89,8 @@ func TestRunSearchCountsUnreadableOfficeDocument(t *testing.T) {
 	}
 }
 
+// TestAppCancelSearchCancelsActiveContext は、CancelSearchが実行中コンテキストを停止し、
+// 同じ検索へ二度目のキャンセルを行わないことを確認する。
 func TestAppCancelSearchCancelsActiveContext(t *testing.T) {
 	t.Parallel()
 
@@ -100,6 +108,8 @@ func TestAppCancelSearchCancelsActiveContext(t *testing.T) {
 	app.finishSearch(generation)
 }
 
+// TestFinishingOlderSearchDoesNotCancelNewSearch は、世代番号が古い終了処理によって
+// 後から開始した検索のコンテキストが解除されないことを確認する。
 func TestFinishingOlderSearchDoesNotCancelNewSearch(t *testing.T) {
 	t.Parallel()
 

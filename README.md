@@ -11,6 +11,12 @@ Folder Search Lite は、Go と Wails で作る軽量なフォルダ検索デス
 - 検索結果と読み取りに失敗した項目数を表示する
 - 検索履歴とブックマークを保存する
 
+## 設計文書
+
+- [クラス図](./docs/class-diagram.md)
+- [基本設計書](./docs/basic-design.md)
+- [詳細設計書](./docs/detailed-design.md)
+
 ## セットアップ
 
 このプロジェクトが使用する Wails v2.13.0 は、Go 1.25.0 以上を要求します。

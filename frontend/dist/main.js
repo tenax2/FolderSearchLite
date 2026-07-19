@@ -1,3 +1,31 @@
+/**
+ * @fileoverview
+ *
+ * Folder Search Liteのフロントエンド制御モジュール。
+ *
+ * Wailsが公開するGo APIを呼び出し、検索条件、結果グリッド、履歴、
+ * ブックマークの表示状態を単一ページ内で管理する。
+ * 外部フレームワークへ依存せず、DOMを直接更新する。
+ */
+
+/**
+ * 画面間で共有する可変状態。
+ *
+ * resultsにはバックエンドから受け取った元配列を保持し、フィルターとソートでは
+ * 新しい配列を作る。これにより、条件解除時に再検索せず元の並びへ戻せる。
+ * currentHistoryIdは、直近の検索を保存ボタンからブックマークするために使用する。
+ *
+ * @type {{
+ *   activeTab: string,
+ *   history: Array<Object>,
+ *   bookmarks: Array<Object>,
+ *   currentHistoryId: string,
+ *   searching: boolean,
+ *   results: Array<Object>,
+ *   filters: Record<string, string>,
+ *   sort: {key: string, direction: "asc"|"desc"}
+ * }}
+ */
 const state = {
   activeTab: "search",
   history: [],
@@ -19,13 +47,24 @@ const state = {
   },
 };
 
+/**
+ * ファイル名とパスを日本語ロケールかつ自然数順で比較する照合器。
+ * numericを有効にするため、file2はfile10より前に並ぶ。
+ */
 const resultCollator = new Intl.Collator("ja", {
   numeric: true,
   sensitivity: "base",
 });
 
+/**
+ * 起動時に解決するDOM要素の参照一覧。
+ *
+ * HTML側のIDとクラスは、このオブジェクトを介してJavaScriptの処理へ接続する。
+ * 必須要素が存在することを前提とし、イベント登録と再描画で同じ参照を再利用する。
+ */
 const elements = {
   statusText: document.querySelector("#statusText"),
+  themeOptions: [...document.querySelectorAll(".theme-option")],
   tabButtons: [...document.querySelectorAll(".tab-button")],
   panels: {
     search: document.querySelector("#searchPanel"),
@@ -57,10 +96,51 @@ const elements = {
   clearHistoryButton: document.querySelector("#clearHistoryButton"),
 };
 
+const THEME_STORAGE_KEY = "folder-search-lite-theme";
+
+/**
+ * 指定テーマを画面へ反映し、切替ボタンの押下状態を同期する。
+ *
+ * @param {"light"|"black"} theme 適用するテーマ名。
+ * @param {boolean} persist ユーザー設定として保存する場合はtrue。
+ * @returns {void}
+ */
+function applyTheme(theme, persist = true) {
+  const selectedTheme = theme === "black" ? "black" : "light";
+  document.documentElement.dataset.theme = selectedTheme;
+
+  for (const button of elements.themeOptions) {
+    button.setAttribute("aria-pressed", String(button.dataset.themeOption === selectedTheme));
+  }
+
+  if (persist) {
+    try {
+      localStorage.setItem(THEME_STORAGE_KEY, selectedTheme);
+    } catch {
+      // 保存できない環境でも、現在の画面にはテーマを適用する。
+    }
+  }
+}
+
+/**
+ * Wailsがwindowへ公開したApp APIを取得する。
+ * ブラウザーだけでHTMLを開いた場合はundefinedを返す。
+ *
+ * @returns {Object|undefined} GoのAppメソッドを持つプロキシ。
+ */
 function appApi() {
   return window.go?.main?.App;
 }
 
+/**
+ * Wailsバックエンドの指定メソッドを呼び出す。
+ * APIまたはメソッドが存在しない場合は、通常のErrorへ変換して呼び出し元へ返す。
+ *
+ * @param {string} methodName window.go.main.App上のメソッド名。
+ * @param {...unknown} args Goメソッドへ順番に渡す引数。
+ * @returns {Promise<unknown>} WailsがJSON変換した戻り値。
+ * @throws {Error} Wails APIが利用できない場合、またはバックエンドがエラーを返した場合。
+ */
 async function callBackend(methodName, ...args) {
   const api = appApi();
   if (!api || typeof api[methodName] !== "function") {
@@ -69,10 +149,23 @@ async function callBackend(methodName, ...args) {
   return api[methodName](...args);
 }
 
+/**
+ * ヘッダーの状態メッセージを置き換える。
+ *
+ * @param {string} message ユーザーへ表示する短い状態説明。
+ * @returns {void}
+ */
 function setStatus(message) {
   elements.statusText.textContent = message;
 }
 
+/**
+ * 検索実行中フラグと関連ボタンの活性状態を同期する。
+ * 二重実行を防ぐため検索ボタンと参照ボタンを無効化し、中断ボタンだけを有効化する。
+ *
+ * @param {boolean} searching 検索処理が進行中ならtrue。
+ * @returns {void}
+ */
 function setSearching(searching) {
   state.searching = searching;
   elements.searchButton.disabled = searching;
@@ -81,10 +174,25 @@ function setSearching(searching) {
   elements.searchButton.textContent = searching ? "検索中" : "検索";
 }
 
+/**
+ * 任意の例外値から表示可能なエラーメッセージを取り出す。
+ * Error以外がthrowされた場合も文字列化し、空値には既定メッセージを使用する。
+ *
+ * @param {unknown} error 捕捉した例外値。
+ * @returns {string} 状態欄へ表示するメッセージ。
+ */
 function errorMessage(error) {
   return error?.message || String(error || "不明なエラーが発生しました");
 }
 
+/**
+ * 拡張子入力欄をバックエンドへ渡す文字列配列へ分解する。
+ * カンマ、空白、セミコロンを区切りとして扱い、空要素を除く。
+ * ピリオド付与、小文字化、重複除去はバックエンドが担当する。
+ *
+ * @param {string} value 拡張子入力欄の文字列。
+ * @returns {string[]} 入力順を保った拡張子配列。
+ */
 function parseExtensions(value) {
   return value
     .split(/[,\s;]+/)
@@ -92,6 +200,14 @@ function parseExtensions(value) {
     .filter(Boolean);
 }
 
+/**
+ * 現在の検索フォームからバックエンド用の要求オブジェクトを構築する。
+ *
+ * includeNamesとincludeDirectoriesは古い履歴形式との互換性のため、
+ * 新しい個別フラグと同時に送信する。入力要素自体は変更しない。
+ *
+ * @returns {Object} GoのSearchRequestへJSON変換できる検索条件。
+ */
 function buildRequest() {
   const includeFileNames = elements.includeFileNames.checked;
   const includeFolderNames = elements.includeFolderNames.checked;
@@ -111,6 +227,15 @@ function buildRequest() {
   };
 }
 
+/**
+ * 履歴またはブックマークの検索条件をフォームへ復元する。
+ *
+ * 個別の名前検索フラグがない旧データでは、includeNamesと
+ * includeDirectoriesをフォールバック値として使用する。
+ *
+ * @param {Object} request 保存済みの検索要求。
+ * @returns {void}
+ */
 function applyRequest(request) {
   elements.rootPath.value = request.rootPath || "";
   elements.query.value = request.query || "";
@@ -123,6 +248,12 @@ function applyRequest(request) {
   elements.maxResults.value = request.maxResults || 500;
 }
 
+/**
+ * 履歴とブックマークを並行取得し、両方の一覧を再描画する。
+ * 取得に失敗した場合は既存表示を維持し、状態欄へエラーを表示する。
+ *
+ * @returns {Promise<void>}
+ */
 async function refreshSavedLists() {
   try {
     const [history, bookmarks] = await Promise.all([
@@ -138,6 +269,16 @@ async function refreshSavedLists() {
   }
 }
 
+/**
+ * 検索要求をバックエンドへ送り、結果、履歴、ボタン状態を更新する。
+ *
+ * フォルダ未入力と二重実行はバックエンドを呼ばず状態メッセージだけを更新する。
+ * 成功時は検索結果を描画して履歴を再取得し、直近履歴の保存ボタンを有効化する。
+ * finallyで必ず検索中状態を解除するため、例外後も再検索できる。
+ *
+ * @param {Object} request buildRequestまたは保存済み履歴から得た検索条件。
+ * @returns {Promise<void>}
+ */
 async function runSearch(request) {
   if (state.searching) {
     setStatus("実行中の検索を中断してから再検索してください");
@@ -174,12 +315,29 @@ async function runSearch(request) {
   }
 }
 
+/**
+ * 新しい検索応答を画面状態へ取り込み、統計と結果行を描画する。
+ * フィルターとソート条件は維持されるため、再検索後の結果にも同じ条件を適用する。
+ *
+ * @param {Object} response GoのSearchResponseをJSON変換した値。
+ * @returns {void}
+ */
 function renderResults(response) {
   state.results = Array.isArray(response.results) ? response.results : [];
   elements.scanSummary.textContent = `${response.totalVisited.toLocaleString()} item / ${response.filesScanned.toLocaleString()} files / ${response.directoriesScanned.toLocaleString()} folders`;
   renderResultRows();
 }
 
+/**
+ * 現在の結果配列へフィルターとソートを適用し、tbodyを再構築する。
+ *
+ * フィルター中は「表示件数 / 全件数」を表示する。
+ * 元結果が存在するのに表示対象が0件の場合は、検索結果なしと
+ * フィルター不一致を区別したメッセージを表示する。
+ * 動的文字列はescapeHtmlまたはescapeAttributeを通してからinnerHTMLへ渡す。
+ *
+ * @returns {void}
+ */
 function renderResultRows() {
   const results = getVisibleResults();
   const hasActiveFilters = Object.values(state.filters).some(Boolean);
@@ -211,6 +369,12 @@ function renderResultRows() {
   }
 }
 
+/**
+ * 元の検索結果から、現在の列フィルターと並び順に一致する配列を作る。
+ * state.resultsは変更せず、filterで生成した新しい配列だけをsortする。
+ *
+ * @returns {Object[]} グリッドへ表示する検索結果。
+ */
 function getVisibleResults() {
   const results = state.results.filter((result) => {
     if (state.filters.kind && result.kind !== state.filters.kind) {
@@ -240,10 +404,29 @@ function getVisibleResults() {
   return results.sort((left, right) => compareResults(left, right, state.sort.key) * direction);
 }
 
+/**
+ * 値が大文字と小文字を区別せずフィルター文字列を含むか判定する。
+ * 空フィルターは全件一致として扱い、nullとundefinedは空文字へ変換する。
+ *
+ * @param {unknown} value 検索対象の値。
+ * @param {string} filter 入力済みフィルター。
+ * @returns {boolean} 表示条件に一致する場合はtrue。
+ */
 function includesFilter(value, filter) {
   return !filter || String(value ?? "").toLocaleLowerCase("ja").includes(filter.toLocaleLowerCase("ja"));
 }
 
+/**
+ * 検索結果のサイズが入力条件に一致するか判定する。
+ *
+ * 「>= 1 MB」のような比較演算子とB、KB、MB、GB、TBを解釈する。
+ * 演算式として解釈できない入力は、formatBytesの表示文字列に対する部分一致へ切り替える。
+ * フォルダはサイズを持たないため、「-」または「フォルダ」の文字列検索だけに一致する。
+ *
+ * @param {Object} result SearchResult互換の結果。
+ * @param {string} filter サイズ欄へ入力された条件。
+ * @returns {boolean} サイズ条件に一致する場合はtrue。
+ */
 function matchesSizeFilter(result, filter) {
   if (!filter) {
     return true;
@@ -269,6 +452,15 @@ function matchesSizeFilter(result, filter) {
   }[operator];
 }
 
+/**
+ * 二つの検索結果を指定列で比較する。
+ * サイズはバイト数、更新日時はUNIX時刻、それ以外は日本語照合器を使用する。
+ *
+ * @param {Object} left 左辺の検索結果。
+ * @param {Object} right 右辺の検索結果。
+ * @param {string} key ソート対象列のキー。
+ * @returns {number} 負数、0、正数の比較結果。
+ */
 function compareResults(left, right, key) {
   if (key === "size") {
     return Number(left.size || 0) - Number(right.size || 0);
@@ -282,6 +474,14 @@ function compareResults(left, right, key) {
   return resultCollator.compare(leftValue, rightValue);
 }
 
+/**
+ * 文字列列をソート用のユーザー向け表現へ変換する。
+ * 種別と一致理由は、内部コードではなく画面に表示する日本語で比較する。
+ *
+ * @param {Object} result SearchResult互換の結果。
+ * @param {string} key ソート対象列のキー。
+ * @returns {string} Intl.Collatorへ渡す比較文字列。
+ */
 function resultSortValue(result, key) {
   if (key === "kind") {
     return result.kind === "folder" ? "フォルダ" : "ファイル";
@@ -292,11 +492,25 @@ function resultSortValue(result, key) {
   return String(result[key] ?? "");
 }
 
+/**
+ * 日時文字列を比較可能なミリ秒値へ変換する。
+ * 不正な日時は0とし、有効な日時より前へ並ぶ値として扱う。
+ *
+ * @param {string} value RFC 3339などDateが解釈できる日時文字列。
+ * @returns {number} 1970-01-01T00:00:00Zからのミリ秒。
+ */
 function dateValue(value) {
   const time = new Date(value).getTime();
   return Number.isNaN(time) ? 0 : time;
 }
 
+/**
+ * 現在のソート状態を列見出しの記号とaria-sortへ反映する。
+ * スクリーンリーダーにはascendingまたはdescendingを伝え、
+ * 未選択列にはnoneと双方向矢印を設定する。
+ *
+ * @returns {void}
+ */
 function updateSortIndicators() {
   for (const button of elements.sortButtons) {
     const active = button.dataset.sort === state.sort.key;
@@ -306,6 +520,12 @@ function updateSortIndicators() {
   }
 }
 
+/**
+ * すべての列フィルターを状態と入力要素の両方から解除する。
+ * ソート条件は保持し、解除後の結果をただちに再描画する。
+ *
+ * @returns {void}
+ */
 function clearResultFilters() {
   for (const key of Object.keys(state.filters)) {
     state.filters[key] = "";
@@ -317,6 +537,11 @@ function clearResultFilters() {
   renderResultRows();
 }
 
+/**
+ * 現在の履歴状態を、保存ボタン付きの一覧として描画する。
+ *
+ * @returns {void}
+ */
 function renderHistory() {
   renderSavedList(elements.historyList, state.history, {
     emptyText: "履歴なし",
@@ -324,6 +549,11 @@ function renderHistory() {
   });
 }
 
+/**
+ * 現在のブックマーク状態を、解除ボタン付きの一覧として描画する。
+ *
+ * @returns {void}
+ */
 function renderBookmarks() {
   renderSavedList(elements.bookmarkList, state.bookmarks, {
     emptyText: "ブックマークなし",
@@ -331,6 +561,18 @@ function renderBookmarks() {
   });
 }
 
+/**
+ * 履歴またはブックマークの共通カード一覧を構築する。
+ *
+ * data-rerun、data-bookmark、data-remove-bookmark属性へIDを設定し、
+ * document単位のクリック委譲で後続操作を識別できるようにする。
+ * 保存データ由来の文字列はHTMLまたは属性用にエスケープする。
+ *
+ * @param {HTMLElement} container 一覧カードを追加する親要素。
+ * @param {Object[]} entries HistoryEntry互換の配列。
+ * @param {{emptyText: string, showBookmark?: boolean, showRemove?: boolean}} options 表示する操作と空表示文言。
+ * @returns {void}
+ */
 function renderSavedList(container, entries, options) {
   container.innerHTML = "";
   if (!entries.length) {
@@ -359,6 +601,13 @@ function renderSavedList(container, entries, options) {
   }
 }
 
+/**
+ * 表示中のタブとtabpanelを指定名へ切り替える。
+ * 見た目のactiveクラスとアクセシビリティ用aria-selectedを同時に更新する。
+ *
+ * @param {"search"|"history"|"bookmarks"} tabName 表示するタブ名。
+ * @returns {void}
+ */
 function switchTab(tabName) {
   state.activeTab = tabName;
   for (const button of elements.tabButtons) {
@@ -371,10 +620,22 @@ function switchTab(tabName) {
   }
 }
 
+/**
+ * 履歴とブックマークを横断して指定IDの保存項目を探す。
+ *
+ * @param {string} id HistoryEntryのID。
+ * @returns {Object|undefined} 最初に一致した項目。存在しなければundefined。
+ */
 function findSavedEntry(id) {
   return [...state.history, ...state.bookmarks].find((entry) => entry.id === id);
 }
 
+/**
+ * 直近の検索履歴をブックマークする。
+ * 検索成功後のHistoryIDがない場合は何も行わない。
+ *
+ * @returns {Promise<void>}
+ */
 async function bookmarkCurrent() {
   if (!state.currentHistoryId) {
     return;
@@ -382,6 +643,13 @@ async function bookmarkCurrent() {
   await bookmarkHistory(state.currentHistoryId);
 }
 
+/**
+ * 指定履歴をブックマークし、履歴とブックマークの表示を同期する。
+ * 成功後は同じ項目を重複保存できないよう現在の保存ボタンを無効化する。
+ *
+ * @param {string} id 保存対象の履歴ID。
+ * @returns {Promise<void>}
+ */
 async function bookmarkHistory(id) {
   try {
     state.bookmarks = (await callBackend("BookmarkHistory", id)) || [];
@@ -393,6 +661,12 @@ async function bookmarkHistory(id) {
   }
 }
 
+/**
+ * 指定IDのブックマークを解除し、保存済み一覧を再取得する。
+ *
+ * @param {string} id 解除対象のブックマークID。
+ * @returns {Promise<void>}
+ */
 async function removeBookmark(id) {
   try {
     state.bookmarks = (await callBackend("RemoveBookmark", id)) || [];
@@ -403,6 +677,13 @@ async function removeBookmark(id) {
   }
 }
 
+/**
+ * ユーザー確認後に検索履歴をすべて削除する。
+ * ブックマークはバックエンド側で保持される。
+ * 確認をキャンセルした場合はAPIを呼ばない。
+ *
+ * @returns {Promise<void>}
+ */
 async function clearHistory() {
   if (!window.confirm("検索履歴をすべて削除しますか？")) {
     return;
@@ -416,6 +697,13 @@ async function clearHistory() {
   }
 }
 
+/**
+ * バイト数を最大TBまでの読みやすい単位へ変換する。
+ * 10未満のKB以上だけ小数第一位を残し、0以下または非数は0 Bとする。
+ *
+ * @param {number} value バイト数。
+ * @returns {string} 画面表示用サイズ。
+ */
 function formatBytes(value) {
   if (!Number.isFinite(value) || value <= 0) {
     return "0 B";
@@ -430,6 +718,13 @@ function formatBytes(value) {
   return `${size.toFixed(size >= 10 || unitIndex === 0 ? 0 : 1)} ${units[unitIndex]}`;
 }
 
+/**
+ * 日時文字列を日本語ロケールの年月日時分へ変換する。
+ * 空値はハイフン、不正な日時は元の文字列を返して情報を失わない。
+ *
+ * @param {string} value Dateが解釈できる日時文字列。
+ * @returns {string} グリッドと保存一覧で使用する日時表現。
+ */
 function formatDate(value) {
   if (!value) {
     return "-";
@@ -447,6 +742,13 @@ function formatDate(value) {
   });
 }
 
+/**
+ * バックエンドの一致理由コードをユーザー向けラベルへ変換する。
+ * 未知のコードは将来拡張の表示を失わないよう、そのまま返す。
+ *
+ * @param {string} value extensionなどの一致理由コード。
+ * @returns {string} 日本語の表示ラベル。
+ */
 function matchLabel(value) {
   return {
     extension: "拡張子",
@@ -456,6 +758,13 @@ function matchLabel(value) {
   }[value] || value;
 }
 
+/**
+ * 動的値をHTMLテキストとして安全に埋め込める文字列へ変換する。
+ * アンパサンドを先に置換し、後続のエンティティ表現を再変換しない。
+ *
+ * @param {unknown} value HTMLへ埋め込む値。
+ * @returns {string} &, <, >, 引用符をエスケープした文字列。
+ */
 function escapeHtml(value) {
   return String(value ?? "")
     .replaceAll("&", "&amp;")
@@ -465,10 +774,27 @@ function escapeHtml(value) {
     .replaceAll("'", "&#039;");
 }
 
+/**
+ * 動的値をHTML属性値として安全に埋め込める文字列へ変換する。
+ * escapeHtmlに加えてテンプレートリテラルで意味を持つバッククォートも置換する。
+ *
+ * @param {unknown} value data属性へ埋め込む値。
+ * @returns {string} 属性値用にエスケープした文字列。
+ */
 function escapeAttribute(value) {
   return escapeHtml(value).replaceAll("`", "&#096;");
 }
 
+/**
+ * 文字列をOSのクリップボードへコピーする。
+ *
+ * Clipboard APIが利用できる環境ではwriteTextを使う。
+ * 利用できないWebViewでは、画面外textareaとexecCommandを一時的に使う。
+ *
+ * @param {string} value コピーするフルパスなどの文字列。
+ * @returns {Promise<void>}
+ * @throws {Error} ブラウザーがコピー操作を拒否した場合。
+ */
 async function copyText(value) {
   if (navigator.clipboard?.writeText) {
     await navigator.clipboard.writeText(value);
@@ -485,11 +811,27 @@ async function copyText(value) {
   textarea.remove();
 }
 
+/*
+ * イベント配線
+ *
+ * 起動時に取得したDOM参照へ操作イベントを登録する。
+ * 行や保存カード内の動的ボタンは再描画で置き換わるため、
+ * 個別登録せずdocumentのクリックハンドラーへ委譲する。
+ */
+
+// 初期テーマを切替ボタンへ同期し、ユーザー操作時は次回起動用に保存する。
+applyTheme(document.documentElement.dataset.theme === "black" ? "black" : "light", false);
+elements.themeOptions.forEach((button) => {
+  button.addEventListener("click", () => applyTheme(button.dataset.themeOption));
+});
+
+// 検索フォームの既定送信を止め、現在の入力値から非同期検索を開始する。
 elements.form.addEventListener("submit", (event) => {
   event.preventDefault();
   runSearch(buildRequest());
 });
 
+// OSのフォルダ選択ダイアログを開き、選択されたパスだけを入力欄へ反映する。
 elements.browseButton.addEventListener("click", async () => {
   try {
     const folder = await callBackend("BrowseFolder");
@@ -502,7 +844,10 @@ elements.browseButton.addEventListener("click", async () => {
   }
 });
 
+// 直近検索の保存操作は、履歴IDの検証をbookmarkCurrentへ委譲する。
 elements.bookmarkCurrentButton.addEventListener("click", bookmarkCurrent);
+
+// 実行中検索へキャンセルを通知し、応答待ちのあいだ中断ボタンを再度押せないようにする。
 elements.cancelSearchButton.addEventListener("click", async () => {
   if (!state.searching) {
     return;
@@ -516,9 +861,11 @@ elements.cancelSearchButton.addEventListener("click", async () => {
     setStatus(errorMessage(error));
   }
 });
+// 履歴全削除と列フィルター解除は、それぞれの状態更新関数へ委譲する。
 elements.clearHistoryButton.addEventListener("click", clearHistory);
 elements.clearFiltersButton.addEventListener("click", clearResultFilters);
 
+// 列フィルターの入力ごとに対応する状態キーを更新し、バックエンドを呼ばず結果だけを再描画する。
 elements.filterControls.forEach((control) => {
   control.addEventListener("input", () => {
     state.filters[control.dataset.filter] = control.value.trim();
@@ -527,6 +874,7 @@ elements.filterControls.forEach((control) => {
   });
 });
 
+// 列見出しは、同じ列なら昇順と降順を反転し、別列なら昇順から開始する。
 elements.sortButtons.forEach((button) => {
   button.addEventListener("click", () => {
     const key = button.dataset.sort;
@@ -541,10 +889,12 @@ elements.sortButtons.forEach((button) => {
   });
 });
 
+// タブボタンのdata-tabを、表示パネルとARIA状態を更新するキーとして使用する。
 elements.tabButtons.forEach((button) => {
   button.addEventListener("click", () => switchTab(button.dataset.tab));
 });
 
+// 再描画される結果行と保存カード内のボタン操作をdata属性で判別する。
 document.addEventListener("click", async (event) => {
   const target = event.target.closest("button");
   if (!target) {
@@ -585,4 +935,5 @@ document.addEventListener("click", async (event) => {
   }
 });
 
+// 初期表示では検索を実行せず、永続化済みの履歴とブックマークだけを読み込む。
 refreshSavedLists();
