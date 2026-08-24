@@ -78,6 +78,16 @@ func (a *App) Search(request SearchRequest) (SearchResponse, error) {
 	return response, nil
 }
 
+// PreviewFile は、内容検索で一致したファイルを再読み込みし、詳細表示用の抜粋を返す。
+// 検索結果応答へ本文を大量に含めず、利用者がプレビューを開いたときだけ読み取る。
+func (a *App) PreviewFile(request FilePreviewRequest) (FilePreview, error) {
+	ctx := a.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return LoadFilePreview(ctx, request)
+}
+
 // CancelSearch は、実行中の検索へキャンセルを通知する。
 // キャンセル対象が存在した場合はtrue、検索中でなければfalseを返す。
 func (a *App) CancelSearch() bool {
