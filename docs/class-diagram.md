@@ -20,6 +20,8 @@ classDiagram
         +runSearch(request) Promise
         +renderResults(response) void
         +renderResultRows() void
+        +openFilePreview(result) Promise
+        +highlightText(value, query, caseSensitive) string
         +refreshSavedLists() Promise
         +switchTab(tabName) void
     }
@@ -30,8 +32,11 @@ classDiagram
         -sync.Mutex searchMu
         -context.CancelFunc searchCancel
         -uint64 searchGeneration
+        -openPath(path, isDirectory) error
         +BrowseFolder() string
         +Search(request SearchRequest) SearchResponse
+        +PreviewFile(request FilePreviewRequest) FilePreview
+        +OpenResult(path string) void
         +CancelSearch() bool
         +GetHistory() HistoryEntry[]
         +ClearHistory() HistoryEntry[]
@@ -59,6 +64,12 @@ classDiagram
         -scanOfficeContent(ctx, filePath, ext, needle, caseSensitive) match
         -shouldScanOfficePart(ext, name string) bool
         -scanXMLText(ctx, reader, needle, caseSensitive) match
+        -previewOfficeContent(ctx, filePath, ext, needle, caseSensitive, limits) FilePreviewExcerpt[]
+    }
+
+    class PreviewEngine {
+        <<module>>
+        +LoadFilePreview(ctx context.Context, request FilePreviewRequest) FilePreview
     }
 
     class Store {
@@ -123,6 +134,25 @@ classDiagram
         +string Preview
     }
 
+    class FilePreviewRequest {
+        +string Path
+        +string Query
+        +bool CaseSensitive
+        +bool IncludeOfficeDocuments
+    }
+
+    class FilePreview {
+        +string Name
+        +string Path
+        +FilePreviewExcerpt[] Excerpts
+        +bool Truncated
+    }
+
+    class FilePreviewExcerpt {
+        +string Location
+        +string Text
+    }
+
     class HistoryEntry {
         +string ID
         +string Label
@@ -146,18 +176,35 @@ classDiagram
         +Office Open XML files
     }
 
+    class SystemPathOpener {
+        <<external>>
+        +default application
+        +Windows Explorer
+    }
+
     FrontendController ..> App : Wails API
     FrontendController ..> SearchRequest : 構築と復元
     FrontendController ..> SearchResponse : 描画
+    FrontendController ..> FilePreviewRequest : 構築
+    FrontendController ..> FilePreview : 描画
     App *-- Store : 所有
     App ..> SearchEngine : 検索実行
     App ..> SearchRequest
     App ..> SearchResponse
+    App ..> PreviewEngine : 一致抜粋の取得
+    App ..> SystemPathOpener : 検索結果を開く
+    App ..> FilePreviewRequest
+    App ..> FilePreview
     SearchEngine ..> OfficeDocumentScanner : Office本文解析
     SearchEngine ..> FileSystem : 再帰走査と読取
     SearchEngine ..> SearchRequest
     SearchEngine ..> SearchResponse
+    PreviewEngine ..> OfficeDocumentScanner : Office抜粋の取得
+    PreviewEngine ..> FileSystem : ファイルの再読み込み
+    PreviewEngine ..> FilePreviewRequest
+    PreviewEngine ..> FilePreview
     SearchResponse *-- "0..*" SearchResult : Results
+    FilePreview *-- "0..*" FilePreviewExcerpt : Excerpts
     Store *-- AppState : メモリ状態
     AppState o-- "0..*" HistoryEntry : History
     AppState o-- "0..*" HistoryEntry : Bookmarks
@@ -171,6 +218,8 @@ classDiagram
 |---|---|---|
 | `FrontendController` | `App` | `window.go.main.App`を介して公開メソッドを呼び出す。 |
 | `App` | `SearchEngine` | 検索コンテキストを作り、検索結果を受け取る。 |
+| `App` | `PreviewEngine` | ファイルを再読み込みし、一致抜粋を受け取る。 |
+| `App` | `SystemPathOpener` | 存在と種別を確認した検索結果を既定アプリまたはExplorerで開く。 |
 | `App` | `Store` | 成功した検索だけを履歴へ保存し、履歴とブックマークの操作を委譲する。 |
 | `SearchEngine` | `OfficeDocumentScanner` | 対応するOffice Open XML形式の本文解析を委譲する。 |
 | `Store` | `StateFile` | ユーザー設定ディレクトリのJSONファイルを一時ファイル経由で置換する。 |
@@ -179,6 +228,8 @@ classDiagram
 ## 多重度
 
 `SearchResponse`は0件以上の`SearchResult`を持つ。
+
+`FilePreview`は0件から12件の`FilePreviewExcerpt`を持つ。
 
 `AppState`は最大100件の履歴を持つ。
 ブックマークには実装上の件数上限を設けていない。

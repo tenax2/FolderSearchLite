@@ -152,6 +152,21 @@
       </section>
     </main>
 
+    <!-- 内容一致した結果だけが、一覧から詳細プレビューを開ける。 -->
+    <dialog id="previewDialog" class="preview-dialog" aria-labelledby="previewTitle">
+      <div class="preview-dialog-shell">
+        <header class="preview-header">
+          <div class="preview-heading">
+            <span class="preview-eyebrow">内容プレビュー</span>
+            <h2 id="previewTitle">ファイル</h2>
+          </div>
+          <button id="closePreviewButton" class="secondary" type="button">閉じる</button>
+        </header>
+        <p id="previewPath" class="preview-path"></p>
+        <div id="previewContent" class="preview-content" aria-live="polite"></div>
+      </div>
+    </dialog>
+
     <!-- DOM構築後にイベント登録と保存済み一覧の初期取得を実行する。 -->
     <script src="./main.js"></script>
   </body>

@@ -22,6 +22,10 @@
  *   currentHistoryId: string,
  *   searching: boolean,
  *   results: Array<Object>,
+ *   query: string,
+ *   caseSensitive: boolean,
+ *   includeOfficeDocuments: boolean,
+ *   previewGeneration: number,
  *   filters: Record<string, string>,
  *   sort: {key: string, direction: "asc"|"desc"}
  * }}
@@ -33,6 +37,10 @@ const state = {
   currentHistoryId: "",
   searching: false,
   results: [],
+  query: "",
+  caseSensitive: false,
+  includeOfficeDocuments: false,
+  previewGeneration: 0,
   filters: {
     kind: "",
     name: "",
@@ -91,6 +99,11 @@ const elements = {
   sortButtons: [...document.querySelectorAll(".sort-button")],
   filterControls: [...document.querySelectorAll(".column-filter")],
   clearFiltersButton: document.querySelector("#clearFiltersButton"),
+  previewDialog: document.querySelector("#previewDialog"),
+  previewTitle: document.querySelector("#previewTitle"),
+  previewPath: document.querySelector("#previewPath"),
+  previewContent: document.querySelector("#previewContent"),
+  closePreviewButton: document.querySelector("#closePreviewButton"),
   historyList: document.querySelector("#historyList"),
   bookmarkList: document.querySelector("#bookmarkList"),
   clearHistoryButton: document.querySelector("#clearHistoryButton"),
@@ -296,7 +309,7 @@ async function runSearch(request) {
   try {
     const response = await callBackend("Search", request);
     state.currentHistoryId = response.historyId;
-    renderResults(response);
+    renderResults(response, request);
     await refreshSavedLists();
     elements.bookmarkCurrentButton.disabled = !state.currentHistoryId;
     const details = [];
@@ -319,11 +332,18 @@ async function runSearch(request) {
  * 新しい検索応答を画面状態へ取り込み、統計と結果行を描画する。
  * フィルターとソート条件は維持されるため、再検索後の結果にも同じ条件を適用する。
  *
+ * 検索語と大小文字条件も保持し、一覧と詳細プレビューの強調表示に使用する。
+ *
  * @param {Object} response GoのSearchResponseをJSON変換した値。
+ * @param {Object} request 応答を生成したSearchRequest互換の条件。
  * @returns {void}
  */
-function renderResults(response) {
+function renderResults(response, request) {
+  closeFilePreview();
   state.results = Array.isArray(response.results) ? response.results : [];
+  state.query = String(response.query ?? request.query ?? "");
+  state.caseSensitive = Boolean(request.caseSensitive);
+  state.includeOfficeDocuments = Boolean(request.includeOfficeDocuments);
   elements.scanSummary.textContent = `${response.totalVisited.toLocaleString()} item / ${response.filesScanned.toLocaleString()} files / ${response.directoriesScanned.toLocaleString()} folders`;
   renderResultRows();
 }
@@ -355,15 +375,28 @@ function renderResultRows() {
 
   for (const result of results) {
     const row = document.createElement("tr");
-    const matches = (result.matchedBy || []).map((item) => `<span class="match-pill">${escapeHtml(matchLabel(item))}</span>`).join("");
+    const matchedBy = result.matchedBy || [];
+    const matches = matchedBy.map((item) => `<span class="match-pill">${escapeHtml(matchLabel(item))}</span>`).join("");
+    const nameMatched = matchedBy.includes("file-name") || matchedBy.includes("folder-name");
+    const contentMatched = matchedBy.includes("content") && Boolean(result.preview);
+    const name = nameMatched
+      ? highlightText(result.name, state.query, state.caseSensitive)
+      : escapeHtml(result.name);
+    const preview = contentMatched
+      ? `<div class="result-preview"><span class="preview-label">内容</span><span>${highlightText(result.preview, state.query, state.caseSensitive)}</span></div>`
+      : "";
+    const previewButton = contentMatched
+      ? `<button class="secondary row-action" type="button" data-preview-id="${escapeAttribute(result.id)}" aria-label="${escapeAttribute(result.name)}の内容をプレビュー">プレビュー</button>`
+      : "";
+    const openLabel = result.kind === "folder" ? "フォルダを開く" : "ファイルを開く";
     row.innerHTML = `
       <td><span class="kind-pill ${result.kind}">${result.kind === "folder" ? "フォルダ" : "ファイル"}</span></td>
-      <td class="name-cell truncate">${escapeHtml(result.name)}</td>
-      <td class="path-cell truncate">${escapeHtml(result.relativePath)}${result.preview ? `<div class="preview">${escapeHtml(result.preview)}</div>` : ""}</td>
+      <td class="name-cell truncate">${name}</td>
+      <td class="path-cell truncate">${escapeHtml(result.relativePath)}${preview}</td>
       <td>${matches}</td>
       <td>${result.kind === "folder" ? "-" : formatBytes(result.size)}</td>
       <td>${formatDate(result.modifiedAt)}</td>
-      <td><button class="secondary row-action" type="button" data-copy="${escapeAttribute(result.path)}">コピー</button></td>
+      <td><div class="row-actions"><button class="secondary row-action" type="button" data-open-id="${escapeAttribute(result.id)}" aria-label="${escapeAttribute(result.name)}の${openLabel}">開く</button>${previewButton}<button class="secondary row-action" type="button" data-copy="${escapeAttribute(result.path)}">コピー</button></div></td>
     `;
     elements.resultsBody.append(row);
   }
@@ -535,6 +568,100 @@ function clearResultFilters() {
   }
   elements.clearFiltersButton.disabled = true;
   renderResultRows();
+}
+
+/**
+ * 内容一致したファイルの詳細プレビューを開く。
+ *
+ * 一覧にある最初の抜粋をただちに表示した後、バックエンドから
+ * 追加の一致箇所を遅延取得する。世代番号により、閉じた後や別ファイルを
+ * 開いた後に到着した古い応答が画面を上書きしないようにする。
+ *
+ * @param {Object} result 内容一致を含むSearchResult互換の結果。
+ * @returns {Promise<void>}
+ */
+async function openFilePreview(result) {
+  const generation = ++state.previewGeneration;
+  elements.previewTitle.textContent = result.name || "内容プレビュー";
+  elements.previewPath.textContent = result.path || "";
+  elements.previewContent.innerHTML = `
+    <p class="preview-loading" role="status">一致箇所を読み込んでいます…</p>
+    ${previewExcerptHtml({ location: "最初の一致", text: result.preview })}
+  `;
+
+  if (!elements.previewDialog.open) {
+    elements.previewDialog.showModal();
+  }
+
+  try {
+    const preview = await callBackend("PreviewFile", {
+      path: result.path,
+      query: state.query,
+      caseSensitive: state.caseSensitive,
+      includeOfficeDocuments: state.includeOfficeDocuments,
+    });
+    if (generation !== state.previewGeneration || !elements.previewDialog.open) {
+      return;
+    }
+    renderFilePreview(preview);
+  } catch (error) {
+    if (generation !== state.previewGeneration || !elements.previewDialog.open) {
+      return;
+    }
+    elements.previewContent.innerHTML = `
+      <p class="preview-error">${escapeHtml(errorMessage(error))}</p>
+      ${previewExcerptHtml({ location: "検索時の一致", text: result.preview })}
+    `;
+  }
+}
+
+/**
+ * バックエンドが返した一致箇所をプレビューダイアログへ描画する。
+ *
+ * @param {Object} preview FilePreview互換の応答。
+ * @returns {void}
+ */
+function renderFilePreview(preview) {
+  const excerpts = Array.isArray(preview.excerpts) ? preview.excerpts : [];
+  elements.previewTitle.textContent = preview.name || elements.previewTitle.textContent;
+  elements.previewPath.textContent = preview.path || elements.previewPath.textContent;
+
+  if (!excerpts.length) {
+    elements.previewContent.innerHTML = `<p class="preview-empty">ファイルが更新されたか、現在の内容に検索語がありません。</p>`;
+    return;
+  }
+
+  const omitted = preview.truncated
+    ? `<p class="preview-note">一致箇所が多いため、先頭 ${excerpts.length.toLocaleString()} 件を表示しています。</p>`
+    : "";
+  elements.previewContent.innerHTML = `${excerpts.map(previewExcerptHtml).join("")}${omitted}`;
+}
+
+/**
+ * 一つの一致箇所を、位置ラベルと強調済みテキストのHTMLへ変換する。
+ *
+ * @param {Object} excerpt FilePreviewExcerpt互換の値。
+ * @returns {string} プレビュー一件分の安全なHTML。
+ */
+function previewExcerptHtml(excerpt) {
+  return `
+    <article class="preview-excerpt">
+      <div class="preview-location">${escapeHtml(excerpt.location || "一致箇所")}</div>
+      <div class="preview-text">${highlightText(excerpt.text || "", state.query, state.caseSensitive)}</div>
+    </article>
+  `;
+}
+
+/**
+ * 開いているプレビューを閉じ、進行中の取得応答を無効化する。
+ *
+ * @returns {void}
+ */
+function closeFilePreview() {
+  state.previewGeneration++;
+  if (elements.previewDialog.open) {
+    elements.previewDialog.close();
+  }
 }
 
 /**
@@ -759,6 +886,52 @@ function matchLabel(value) {
 }
 
 /**
+ * テキスト内の検索語をmark要素で囲み、HTMLとして安全な文字列を返す。
+ *
+ * 検索語を正規表現としてエスケープし、ファイル内の文字列は一致区間ごとに
+ * escapeHtmlを適用する。これにより、<や&を含む検索語でも表示と強調を両立する。
+ *
+ * @param {unknown} value 表示するテキスト。
+ * @param {string} query 強調する検索語。
+ * @param {boolean} caseSensitive 大文字と小文字を区別する場合はtrue。
+ * @returns {string} 一致箇所だけにmark要素を持つHTML。
+ */
+function highlightText(value, query, caseSensitive) {
+  const text = String(value ?? "");
+  if (!query) {
+    return escapeHtml(text);
+  }
+
+  let matcher;
+  try {
+    matcher = new RegExp(escapeRegExp(query), caseSensitive ? "gu" : "giu");
+  } catch {
+    return escapeHtml(text);
+  }
+
+  let html = "";
+  let cursor = 0;
+  for (const match of text.matchAll(matcher)) {
+    const index = match.index ?? 0;
+    html += escapeHtml(text.slice(cursor, index));
+    html += `<mark class="search-hit">${escapeHtml(match[0])}</mark>`;
+    cursor = index + match[0].length;
+  }
+  html += escapeHtml(text.slice(cursor));
+  return html;
+}
+
+/**
+ * 任意の文字列を、正規表現のリテラル文字列として扱えるようにエスケープする。
+ *
+ * @param {string} value エスケープする検索語。
+ * @returns {string} RegExpコンストラクタへ安全に渡せる文字列。
+ */
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
  * 動的値をHTMLテキストとして安全に埋め込める文字列へ変換する。
  * アンパサンドを先に置換し、後続のエンティティ表現を再変換しない。
  *
@@ -864,6 +1037,15 @@ elements.cancelSearchButton.addEventListener("click", async () => {
 // 履歴全削除と列フィルター解除は、それぞれの状態更新関数へ委譲する。
 elements.clearHistoryButton.addEventListener("click", clearHistory);
 elements.clearFiltersButton.addEventListener("click", clearResultFilters);
+elements.closePreviewButton.addEventListener("click", closeFilePreview);
+elements.previewDialog.addEventListener("close", () => {
+  state.previewGeneration++;
+});
+elements.previewDialog.addEventListener("click", (event) => {
+  if (event.target === elements.previewDialog) {
+    closeFilePreview();
+  }
+});
 
 // 列フィルターの入力ごとに対応する状態キーを更新し、バックエンドを呼ばず結果だけを再描画する。
 elements.filterControls.forEach((control) => {
@@ -898,6 +1080,29 @@ elements.tabButtons.forEach((button) => {
 document.addEventListener("click", async (event) => {
   const target = event.target.closest("button");
   if (!target) {
+    return;
+  }
+
+  const openId = target.dataset.openId;
+  if (openId) {
+    const result = state.results.find((item) => item.id === openId);
+    if (result) {
+      try {
+        await callBackend("OpenResult", result.path);
+        setStatus(result.kind === "folder" ? "フォルダを開きました" : "ファイルを開きました");
+      } catch (error) {
+        setStatus(errorMessage(error));
+      }
+    }
+    return;
+  }
+
+  const previewId = target.dataset.previewId;
+  if (previewId) {
+    const result = state.results.find((item) => item.id === previewId);
+    if (result) {
+      openFilePreview(result);
+    }
     return;
   }
 

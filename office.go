@@ -122,6 +122,12 @@ func shouldScanOfficePart(ext string, name string) bool {
 // バッファはofficePreviewWindowを超えると後半だけを残し、文書全体の保持を避ける。
 // XMLが不正な場合とctxがキャンセルされた場合は、原因となったエラーを返す。
 func scanXMLText(ctx context.Context, reader io.Reader, needle string, caseSensitive bool) (bool, string, error) {
+	return scanXMLTextWithLimit(ctx, reader, needle, caseSensitive, 220)
+}
+
+// scanXMLTextWithLimit は、抽出する一致周辺の最大ルーン数を指定できるXML本文検索である。
+// 通常の検索結果は短い抜粋、詳細プレビューは長い抜粋を同じ解析処理から生成する。
+func scanXMLTextWithLimit(ctx context.Context, reader io.Reader, needle string, caseSensitive bool, previewRuneLimit int) (bool, string, error) {
 	decoder := xml.NewDecoder(reader)
 	var buffer strings.Builder
 
@@ -159,7 +165,7 @@ func scanXMLText(ctx context.Context, reader io.Reader, needle string, caseSensi
 			candidate = strings.ToLower(candidate)
 		}
 		if strings.Contains(candidate, needle) {
-			return true, compactMatch(segment, needle, caseSensitive, 220), nil
+			return true, compactMatch(segment, needle, caseSensitive, previewRuneLimit), nil
 		}
 		if len([]rune(segment)) > officePreviewWindow {
 			// 無制限なメモリ増加を避けつつ、次のトークンとの境界に必要な末尾を保持する。
@@ -167,6 +173,65 @@ func scanXMLText(ctx context.Context, reader io.Reader, needle string, caseSensi
 			buffer.WriteString(tailRunes(segment, officePreviewWindow/2))
 		}
 	}
+}
+
+// previewOfficeContent は、Office Open XML文書の各検索対象パーツから最初の一致を収集する。
+// 一致数がexcerptLimitを超えた場合は、上限分と省略フラグを返す。
+func previewOfficeContent(
+	ctx context.Context,
+	filePath string,
+	ext string,
+	needle string,
+	caseSensitive bool,
+	excerptLimit int,
+	previewRuneLimit int,
+) ([]FilePreviewExcerpt, bool, error) {
+	reader, err := zip.OpenReader(filePath)
+	if err != nil {
+		return nil, false, err
+	}
+	defer reader.Close()
+
+	excerpts := make([]FilePreviewExcerpt, 0, excerptLimit)
+	var firstErr error
+	for _, file := range reader.File {
+		if err := ctx.Err(); err != nil {
+			return nil, false, err
+		}
+
+		name := path.Clean(strings.ReplaceAll(file.Name, "\\", "/"))
+		if !shouldScanOfficePart(ext, name) {
+			continue
+		}
+
+		part, err := file.Open()
+		if err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		matched, preview, scanErr := scanXMLTextWithLimit(ctx, part, needle, caseSensitive, previewRuneLimit)
+		_ = part.Close()
+		if matched {
+			if len(excerpts) >= excerptLimit {
+				return excerpts, true, nil
+			}
+			excerpts = append(excerpts, FilePreviewExcerpt{
+				Location: fmt.Sprintf("%s / %s", officePartLabel(name), strings.TrimSuffix(path.Base(name), path.Ext(name))),
+				Text:     preview,
+			})
+		}
+		if scanErr != nil && firstErr == nil {
+			firstErr = scanErr
+		}
+	}
+
+	if len(excerpts) > 0 {
+		// 一部パーツが壊れていても、表示できる一致があればそれを優先する。
+		return excerpts, false, nil
+	}
+	return excerpts, false, firstErr
 }
 
 // tailRunes は、文字列の末尾から最大limitルーンを返す。

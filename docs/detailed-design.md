@@ -16,13 +16,18 @@
 | `doc.go` | Goパッケージ全体の責務を説明する。 |
 | `main.go` | 静的アセットを埋め込み、WailsウィンドウとAPIバインディングを構成する。 |
 | `app.go` | Wails公開API、検索コンテキスト、検索世代を管理する。 |
+| `open_windows.go` | ファイルをWindows Shell、フォルダをExplorerで開く。 |
+| `open_other.go` | Windows以外の標準デスクトップオープナーで対象を開く。 |
 | `search.go` | 検索要求、応答、履歴の型とファイルシステム検索を実装する。 |
+| `preview.go` | プレビューの型と、プレーンテキストの一致抜粋取得を実装する。 |
 | `office.go` | Office Open XML文書のZIPパーツ選択とXML本文検索を実装する。 |
 | `store.go` | 履歴とブックマークのメモリ管理とJSON永続化を実装する。 |
 | `search_test.go` | 検索信頼性とキャンセル制御を検証する。 |
-| `frontend/dist/index.html` | タブ、検索フォーム、結果グリッド、保存一覧のDOM構造を定義する。 |
-| `frontend/dist/styles.css` | 画面配置、結果グリッド、保存カード、レスポンシブ表示を定義する。 |
-| `frontend/dist/main.js` | UI状態、Wails API呼び出し、描画、フィルター、ソート、イベントを実装する。 |
+| `preview_test.go` | プレビューの大小文字条件、件数上限、Office文書取得を検証する。 |
+| `open_test.go` | 開く対象の種別判定、存在確認、OS起動エラーの伝播を検証する。 |
+| `frontend/dist/index.html` | タブ、検索フォーム、結果グリッド、プレビューダイアログ、保存一覧のDOM構造を定義する。 |
+| `frontend/dist/styles.css` | 画面配置、結果グリッド、強調色、プレビュー、レスポンシブ表示を定義する。 |
+| `frontend/dist/main.js` | UI状態、Wails API呼び出し、描画、強調表示、プレビュー、フィルター、ソート、イベントを実装する。 |
 | `wails.json` | Wailsプロジェクト名、アセット、出力ファイル名を定義する。 |
 
 ## 起動処理
@@ -57,6 +62,8 @@
 |---|---|---|---|
 | `BrowseFolder` | なし | 選択パス。取消時は空文字。 | startup前の呼び出し、OSダイアログエラー |
 | `Search` | `SearchRequest` | `SearchResponse` | ルート不正、キャンセル、走査失敗、履歴保存失敗 |
+| `PreviewFile` | `FilePreviewRequest` | `FilePreview` | 対象または検索語の未指定、非通常ファイル、読み取り失敗 |
+| `OpenResult` | 対象パス | なし | パス未指定、対象不存在、非通常ファイル、OS起動失敗 |
 | `CancelSearch` | なし | キャンセル対象があれば`true` | なし |
 | `GetHistory` | なし | `HistoryEntry[]` | 状態ファイル読み込み失敗 |
 | `ClearHistory` | なし | 空の`HistoryEntry[]` | 状態ファイル読み書き失敗 |
@@ -89,6 +96,25 @@ sequenceDiagram
 
 `RunSearchContext`または`AddHistory`が失敗した場合、`Search`は空の応答とエラーを返す。
 キャンセルされた検索の途中結果は履歴へ保存しない。
+
+### PreviewFileの処理順序
+
+1. パスと検索語の前後空白を除去する。
+2. 対象が存在する通常ファイルかを確認する。
+3. Office Open XML文書は対象XMLパーツ、その他はテキスト行を読み取る。
+4. 一致箇所を最大12件まで収集する。
+5. 13件目を検出した場合は`truncated`を`true`とし、後続の読み取りを終了する。
+
+検索結果応答に複数の抜粋は含めない。
+利用者が「プレビュー」を押したときだけ`PreviewFile`を呼び出す。
+
+### OpenResultの処理順序
+
+1. パスが空でないことを確認し、絶対パスへ変換する。
+2. `os.Stat`で対象が現在も存在することを確認する。
+3. 通常ファイルまたはフォルダ以外の対象を拒否する。
+4. Windowsでは通常ファイルをShellの関連付け先へ渡し、フォルダを`explorer.exe`へ渡す。
+5. OS起動に失敗した場合はWails経由で画面へエラーを返す。
 
 ## 検索データ構造
 
@@ -141,6 +167,26 @@ sequenceDiagram
 | `UnreadableItems` | `unreadableItems` | 個別に除外した項目数 |
 | `LimitReached` | `limitReached` | 結果上限による早期終了の有無 |
 | `Results` | `results` | 検索結果配列 |
+
+### FilePreviewRequest
+
+| フィールド | JSON名 | 内容 |
+|---|---|---|
+| `Path` | `path` | プレビュー対象のフルパス |
+| `Query` | `query` | 内容で再照合する検索語 |
+| `CaseSensitive` | `caseSensitive` | 大文字と小文字の区別 |
+| `IncludeOfficeDocuments` | `includeOfficeDocuments` | Office Open XML解析の有効状態 |
+
+### FilePreview
+
+| フィールド | JSON名 | 内容 |
+|---|---|---|
+| `Name` | `name` | 親ディレクトリを含まないファイル名 |
+| `Path` | `path` | 読み取り時点で正規化したフルパス |
+| `Excerpts` | `excerpts` | `FilePreviewExcerpt`の配列 |
+| `Truncated` | `truncated` | 上限を超える一致を省略したか |
+
+`FilePreviewExcerpt`は、行番号またはOfficeパーツ名を示す`location`と、最大600ルーンの`text`を持つ。
 
 ### HistoryEntry
 
@@ -358,6 +404,10 @@ JSONが不正な場合は呼び出し元へエラーを返す。
 | `currentHistoryId` | string | 直近検索を保存するための履歴ID |
 | `searching` | boolean | 検索実行中フラグ |
 | `results` | array | バックエンドから受け取った未加工の結果 |
+| `query` | string | 一覧と詳細プレビューで強調する検索語 |
+| `caseSensitive` | boolean | 強調時の大小文字区別 |
+| `includeOfficeDocuments` | boolean | 詳細プレビューのOffice解析フラグ |
+| `previewGeneration` | number | 閉じた後に到着したプレビュー応答を無効化する世代番号 |
 | `filters` | object | 6列のフィルター文字列 |
 | `sort.key` | string | 現在のソート列。未指定は空文字。 |
 | `sort.direction` | string | `asc`または`desc` |
@@ -377,6 +427,7 @@ JSONが不正な場合は呼び出し元へエラーを返す。
 | 結果 | `#resultsBody` | 動的な結果行を保持する。 |
 | フィルター | `.column-filter`, `#clearFiltersButton` | 表示結果を列別に絞り込む。 |
 | ソート | `.sort-button` | ソート列と方向を切り替える。 |
+| プレビュー | `#previewDialog`, `#previewContent` | ファイル情報と一致抜粋を表示する。 |
 | 保存一覧 | `#historyList`, `#bookmarkList` | 履歴とブックマークのカードを保持する。 |
 
 ## フロントエンド処理
@@ -393,6 +444,22 @@ JSONが不正な場合は呼び出し元へエラーを返す。
 `setSearching(true)`は検索ボタンと参照ボタンを無効化し、中断ボタンを有効化する。
 
 検索成功、失敗、キャンセルのいずれでも、`runSearch`の`finally`が`setSearching(false)`を呼ぶ。
+
+### 一致語の強調表示
+
+`highlightText`は検索語を正規表現としてエスケープし、大小文字条件を保ったまますべての一致位置を取得する。
+各一致と非一致の文字列を個別にHTMLエスケープし、一致区間だけを`mark.search-hit`で囲む。
+
+名前は`file-name`または`folder-name`で一致した結果だけを強調する。
+内容は`content`で一致した結果の一覧抜粋と詳細プレビューを強調する。
+
+### 詳細プレビュー
+
+`openFilePreview`は、検索結果に含まれる最初の抜粋をすぐにダイアログへ表示する。
+その後で`PreviewFile`を呼び出し、返却された抜粋一覧へ置き換える。
+
+開いている間に別のプレビューを開くかダイアログを閉じると、`previewGeneration`を更新する。
+応答時の世代が現在値と異なる場合は描画しない。
 
 ### 結果フィルター
 
@@ -439,6 +506,7 @@ JSONが不正な場合は呼び出し元へエラーを返す。
 ### 動的HTMLの安全性
 
 ファイル名、パス、本文プレビュー、履歴ラベルは`escapeHtml`を通す。
+強調表示も一致区間と非一致区間をエスケープした後で、実装側が生成する`mark`要素だけを追加する。
 
 `data-*`属性へ入れる値は`escapeAttribute`を通し、HTML特殊文字とバッククォートを置換する。
 
@@ -449,6 +517,8 @@ JSONが不正な場合は呼び出し元へエラーを返す。
 
 | data属性 | 操作 |
 |---|---|
+| `data-open-id` | 対応する検索結果を探し、`OpenResult`へフルパスを渡す。 |
+| `data-preview-id` | 対応する検索結果を探し、内容プレビューを開く。 |
 | `data-copy` | フルパスをコピーする。 |
 | `data-rerun` | 保存済み要求をフォームへ復元して再検索する。 |
 | `data-bookmark` | 履歴をブックマークする。 |
@@ -491,6 +561,8 @@ max      | actions
 | `RunSearchContext`のルート検証 | エラーを返す。 | `errorMessage`で状態欄へ表示する。 |
 | `WalkDir`の個別項目 | `UnreadableItems`へ加算する。 | 検索完了時の詳細へ件数を表示する。 |
 | 本文読み取り | キャンセル以外は`UnreadableItems`へ加算する。 | 検索完了時の詳細へ件数を表示する。 |
+| `PreviewFile`の読み取り | エラーをWailsへ返す。 | ダイアログ内にエラーと検索時の抜粋を表示する。 |
+| `OpenResult`の存在確認、OS起動 | エラーをWailsへ返す。 | 状態欄へ表示する。 |
 | `context.Canceled` | `App.Search`が「検索を中断しました」へ変換する。 | 状態欄へ表示する。 |
 | Store読み書き | エラーをWailsへ返す。 | 状態欄へ表示する。 |
 | Wails API不存在 | `callBackend`がErrorを生成する。 | 状態欄へ表示する。 |
@@ -505,6 +577,14 @@ max      | actions
 | `TestRunSearchCountsUnreadableOfficeDocument` | ZIPではない`.docx`を置く。 | Office本文検索を実行する。 | 検索は成功し、失敗件数が1、結果が0件になる。 |
 | `TestAppCancelSearchCancelsActiveContext` | 実行中コンテキストを作る。 | `CancelSearch`を二度呼ぶ。 | 一度目はtrueでコンテキスト停止、二度目はfalseになる。 |
 | `TestFinishingOlderSearchDoesNotCancelNewSearch` | 二世代の検索を開始する。 | 古い世代の終了処理を呼ぶ。 | 新しい検索は有効なままになる。 |
+| `TestLoadFilePreviewReturnsMatchingLines` | 大小文字が異なる一致行がある。 | 大小文字を区別せずプレビューする。 | 原文の表記と行番号を保った二つの抜粋を返す。 |
+| `TestLoadFilePreviewHonorsCaseSensitivity` | 大文字行と小文字行がある。 | 大小文字を区別してプレビューする。 | 表記が一致する行だけを返す。 |
+| `TestLoadFilePreviewLimitsExcerptCount` | 上限を超える一致行がある。 | プレビューを取得する。 | 12件と`truncated=true`を返す。 |
+| `TestLoadFilePreviewReadsOfficeDocument` | Word本文XMLに検索語がある。 | Officeプレビューを取得する。 | パーツ名と一致周辺を返す。 |
+| `TestOpenResultUsesDefaultApplicationForFile` | 通常ファイルが存在する。 | 結果を開く。 | 絶対パスとファイル種別をOSオープナーへ渡す。 |
+| `TestOpenResultUsesExplorerForFolder` | フォルダが存在する。 | 結果を開く。 | 絶対パスとフォルダ種別をOSオープナーへ渡す。 |
+| `TestOpenResultRejectsMissingPath` | 対象が存在しない。 | 結果を開く。 | エラーを返し、OSオープナーを呼ばない。 |
+| `TestOpenResultReturnsOpenerError` | OSオープナーが失敗する。 | 結果を開く。 | OS側のエラーを呼び出し元へ返す。 |
 
 ## 実装上の注意
 

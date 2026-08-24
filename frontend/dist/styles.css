@@ -31,6 +31,11 @@
   --folder-pill-bg: #fff2d7;
   --match-pill-bg: #edf2f7;
   --match-pill-text: #465966;
+  --hit-bg: #ffe58f;
+  --hit-text: #4f3800;
+  --hit-line: #e0ae00;
+  --preview-bg: #f3f8f7;
+  --dialog-backdrop: rgba(15, 23, 42, 0.48);
   --empty-bg: rgba(255, 255, 255, 0.66);
   --shadow: 0 10px 22px rgba(16, 24, 40, 0.08);
   --small-shadow: 0 1px 3px rgba(16, 24, 40, 0.08);
@@ -59,6 +64,11 @@
   --folder-pill-bg: var(--color-2);
   --match-pill-bg: var(--color-2);
   --match-pill-text: var(--color-4);
+  --hit-bg: var(--color-5);
+  --hit-text: var(--color-1);
+  --hit-line: #ffe071;
+  --preview-bg: #262626;
+  --dialog-backdrop: rgba(0, 0, 0, 0.72);
   --empty-bg: rgba(28, 28, 28, 0.72);
   --shadow: 0 10px 24px rgba(0, 0, 0, 0.34);
   --small-shadow: 0 1px 3px rgba(0, 0, 0, 0.45);
@@ -500,17 +510,179 @@ tbody tr:hover {
   overflow-wrap: anywhere;
 }
 
-/* 本文プレビューは主パスより弱い色と小さい文字で補足情報として示す。 */
-.preview {
-  margin-top: 5px;
+/* 一覧の内容プレビューをパスと分け、最初の一致をすぐ確認できるようにする。 */
+.result-preview {
+  display: flex;
+  gap: 7px;
+  align-items: flex-start;
+  margin-top: 7px;
+  border-left: 3px solid var(--accent);
+  border-radius: 4px;
+  background: var(--preview-bg);
+  padding: 6px 8px;
   color: var(--muted);
   font-size: 12px;
+  line-height: 1.55;
+}
+
+.preview-label {
+  flex: 0 0 auto;
+  padding-top: 2px;
+  color: var(--accent-dark);
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+}
+
+/* 検索語はテーマごとの高コントラスト色で、一覧と詳細の両方を同じ見た目にする。 */
+.search-hit {
+  border-radius: 3px;
+  background: var(--hit-bg);
+  box-shadow: inset 0 -1px 0 var(--hit-line);
+  color: var(--hit-text);
+  padding: 0 0.14em;
+  font-weight: 700;
+}
+
+.row-actions {
+  display: flex;
+  gap: 6px;
+  align-items: stretch;
+  flex-direction: column;
 }
 
 .row-action {
   min-width: 54px;
   min-height: 30px;
   padding: 0 9px;
+  white-space: nowrap;
+}
+
+/*
+ * 詳細プレビュー
+ *
+ * dialogの外側を暗くし、ファイル名とパスを固定したまま一致箇所だけをスクロールする。
+ */
+.preview-dialog {
+  width: min(820px, calc(100vw - 48px));
+  max-width: none;
+  max-height: min(760px, calc(100vh - 48px));
+  margin: auto;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+  color: var(--text);
+  padding: 0;
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.28);
+}
+
+.preview-dialog::backdrop {
+  background: var(--dialog-backdrop);
+  backdrop-filter: blur(2px);
+}
+
+.preview-dialog-shell {
+  max-height: min(760px, calc(100vh - 48px));
+  display: grid;
+  grid-template-rows: auto auto minmax(120px, 1fr);
+  overflow: hidden;
+}
+
+.preview-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 18px 20px 10px;
+}
+
+.preview-heading {
+  min-width: 0;
+}
+
+.preview-heading h2 {
+  margin-top: 3px;
+  overflow-wrap: anywhere;
+  font-size: 18px;
+}
+
+.preview-eyebrow {
+  color: var(--accent-dark);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+}
+
+.preview-path {
+  margin: 0 20px 14px;
+  color: var(--muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.preview-content {
+  min-height: 0;
+  display: grid;
+  align-content: start;
+  gap: 10px;
+  overflow: auto;
+  border-top: 1px solid var(--line);
+  background: var(--preview-bg);
+  padding: 16px 20px 20px;
+}
+
+.preview-excerpt {
+  display: grid;
+  grid-template-columns: minmax(90px, 120px) minmax(0, 1fr);
+  gap: 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  padding: 11px 13px;
+}
+
+.preview-location {
+  color: var(--accent-dark);
+  font-size: 12px;
+  font-weight: 800;
+  overflow-wrap: anywhere;
+}
+
+.preview-text {
+  color: var(--text);
+  font-family: Consolas, "Yu Gothic UI", Meiryo, monospace;
+  font-size: 13px;
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.preview-loading,
+.preview-note,
+.preview-error,
+.preview-empty {
+  border-radius: 7px;
+  padding: 10px 12px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.preview-loading,
+.preview-note,
+.preview-empty {
+  color: var(--muted);
+}
+
+.preview-loading,
+.preview-empty {
+  border: 1px dashed var(--line);
+  background: var(--surface);
+}
+
+.preview-error {
+  border: 1px solid color-mix(in srgb, var(--danger) 35%, var(--line));
+  background: color-mix(in srgb, var(--danger) 8%, var(--surface));
+  color: var(--danger);
 }
 
 /* 履歴とブックマークの見出し操作を同じ横並び構造で揃える。 */
