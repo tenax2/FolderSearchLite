@@ -3,6 +3,10 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
@@ -21,13 +25,17 @@ type App struct {
 	searchCancel context.CancelFunc
 	// searchGeneration は、古い検索の終了処理が新しい検索を解除しないための世代番号である。
 	searchGeneration uint64
+	// openPath は、確認済みのファイルまたはフォルダをOSへ渡す。
+	// テストでは差し替え、関連付け済みアプリやExplorerを実際には起動しない。
+	openPath func(path string, isDirectory bool) error
 }
 
 // NewApp は、空のライフサイクル状態と永続ストアを持つAppを生成する。
 // Wailsのコンテキストはstartupが後から設定する。
 func NewApp() *App {
 	return &App{
-		store: NewStore(),
+		store:    NewStore(),
+		openPath: openSystemPath,
 	}
 }
 
@@ -86,6 +94,35 @@ func (a *App) PreviewFile(request FilePreviewRequest) (FilePreview, error) {
 		ctx = context.Background()
 	}
 	return LoadFilePreview(ctx, request)
+}
+
+// OpenResult は、検索結果の現在の種別をファイルシステムで確認してOSへ渡す。
+// ファイルは関連付け済みの既定アプリで開き、フォルダはWindowsではExplorerで開く。
+// 検索後に削除された対象や、通常ファイルでもフォルダでもない対象は開かない。
+func (a *App) OpenResult(path string) error {
+	if strings.TrimSpace(path) == "" {
+		return errors.New("開く対象のパスを指定してください")
+	}
+
+	absolutePath, err := filepath.Abs(path)
+	if err != nil {
+		return fmt.Errorf("対象のパスを解決できません: %w", err)
+	}
+
+	info, err := os.Stat(absolutePath)
+	if err != nil {
+		return fmt.Errorf("対象を確認できません: %w", err)
+	}
+	if !info.IsDir() && !info.Mode().IsRegular() {
+		return errors.New("対象は通常ファイルまたはフォルダではありません")
+	}
+	if a.openPath == nil {
+		return errors.New("対象を開く機能を初期化できませんでした")
+	}
+	if err := a.openPath(absolutePath, info.IsDir()); err != nil {
+		return fmt.Errorf("対象を開けません: %w", err)
+	}
+	return nil
 }
 
 // CancelSearch は、実行中の検索へキャンセルを通知する。

@@ -16,12 +16,15 @@
 | `doc.go` | Goパッケージ全体の責務を説明する。 |
 | `main.go` | 静的アセットを埋め込み、WailsウィンドウとAPIバインディングを構成する。 |
 | `app.go` | Wails公開API、検索コンテキスト、検索世代を管理する。 |
+| `open_windows.go` | ファイルをWindows Shell、フォルダをExplorerで開く。 |
+| `open_other.go` | Windows以外の標準デスクトップオープナーで対象を開く。 |
 | `search.go` | 検索要求、応答、履歴の型とファイルシステム検索を実装する。 |
 | `preview.go` | プレビューの型と、プレーンテキストの一致抜粋取得を実装する。 |
 | `office.go` | Office Open XML文書のZIPパーツ選択とXML本文検索を実装する。 |
 | `store.go` | 履歴とブックマークのメモリ管理とJSON永続化を実装する。 |
 | `search_test.go` | 検索信頼性とキャンセル制御を検証する。 |
 | `preview_test.go` | プレビューの大小文字条件、件数上限、Office文書取得を検証する。 |
+| `open_test.go` | 開く対象の種別判定、存在確認、OS起動エラーの伝播を検証する。 |
 | `frontend/dist/index.html` | タブ、検索フォーム、結果グリッド、プレビューダイアログ、保存一覧のDOM構造を定義する。 |
 | `frontend/dist/styles.css` | 画面配置、結果グリッド、強調色、プレビュー、レスポンシブ表示を定義する。 |
 | `frontend/dist/main.js` | UI状態、Wails API呼び出し、描画、強調表示、プレビュー、フィルター、ソート、イベントを実装する。 |
@@ -60,6 +63,7 @@
 | `BrowseFolder` | なし | 選択パス。取消時は空文字。 | startup前の呼び出し、OSダイアログエラー |
 | `Search` | `SearchRequest` | `SearchResponse` | ルート不正、キャンセル、走査失敗、履歴保存失敗 |
 | `PreviewFile` | `FilePreviewRequest` | `FilePreview` | 対象または検索語の未指定、非通常ファイル、読み取り失敗 |
+| `OpenResult` | 対象パス | なし | パス未指定、対象不存在、非通常ファイル、OS起動失敗 |
 | `CancelSearch` | なし | キャンセル対象があれば`true` | なし |
 | `GetHistory` | なし | `HistoryEntry[]` | 状態ファイル読み込み失敗 |
 | `ClearHistory` | なし | 空の`HistoryEntry[]` | 状態ファイル読み書き失敗 |
@@ -103,6 +107,14 @@ sequenceDiagram
 
 検索結果応答に複数の抜粋は含めない。
 利用者が「プレビュー」を押したときだけ`PreviewFile`を呼び出す。
+
+### OpenResultの処理順序
+
+1. パスが空でないことを確認し、絶対パスへ変換する。
+2. `os.Stat`で対象が現在も存在することを確認する。
+3. 通常ファイルまたはフォルダ以外の対象を拒否する。
+4. Windowsでは通常ファイルをShellの関連付け先へ渡し、フォルダを`explorer.exe`へ渡す。
+5. OS起動に失敗した場合はWails経由で画面へエラーを返す。
 
 ## 検索データ構造
 
@@ -505,6 +517,7 @@ JSONが不正な場合は呼び出し元へエラーを返す。
 
 | data属性 | 操作 |
 |---|---|
+| `data-open-id` | 対応する検索結果を探し、`OpenResult`へフルパスを渡す。 |
 | `data-preview-id` | 対応する検索結果を探し、内容プレビューを開く。 |
 | `data-copy` | フルパスをコピーする。 |
 | `data-rerun` | 保存済み要求をフォームへ復元して再検索する。 |
@@ -549,6 +562,7 @@ max      | actions
 | `WalkDir`の個別項目 | `UnreadableItems`へ加算する。 | 検索完了時の詳細へ件数を表示する。 |
 | 本文読み取り | キャンセル以外は`UnreadableItems`へ加算する。 | 検索完了時の詳細へ件数を表示する。 |
 | `PreviewFile`の読み取り | エラーをWailsへ返す。 | ダイアログ内にエラーと検索時の抜粋を表示する。 |
+| `OpenResult`の存在確認、OS起動 | エラーをWailsへ返す。 | 状態欄へ表示する。 |
 | `context.Canceled` | `App.Search`が「検索を中断しました」へ変換する。 | 状態欄へ表示する。 |
 | Store読み書き | エラーをWailsへ返す。 | 状態欄へ表示する。 |
 | Wails API不存在 | `callBackend`がErrorを生成する。 | 状態欄へ表示する。 |
@@ -567,6 +581,10 @@ max      | actions
 | `TestLoadFilePreviewHonorsCaseSensitivity` | 大文字行と小文字行がある。 | 大小文字を区別してプレビューする。 | 表記が一致する行だけを返す。 |
 | `TestLoadFilePreviewLimitsExcerptCount` | 上限を超える一致行がある。 | プレビューを取得する。 | 12件と`truncated=true`を返す。 |
 | `TestLoadFilePreviewReadsOfficeDocument` | Word本文XMLに検索語がある。 | Officeプレビューを取得する。 | パーツ名と一致周辺を返す。 |
+| `TestOpenResultUsesDefaultApplicationForFile` | 通常ファイルが存在する。 | 結果を開く。 | 絶対パスとファイル種別をOSオープナーへ渡す。 |
+| `TestOpenResultUsesExplorerForFolder` | フォルダが存在する。 | 結果を開く。 | 絶対パスとフォルダ種別をOSオープナーへ渡す。 |
+| `TestOpenResultRejectsMissingPath` | 対象が存在しない。 | 結果を開く。 | エラーを返し、OSオープナーを呼ばない。 |
+| `TestOpenResultReturnsOpenerError` | OSオープナーが失敗する。 | 結果を開く。 | OS側のエラーを呼び出し元へ返す。 |
 
 ## 実装上の注意
 

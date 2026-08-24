@@ -388,6 +388,7 @@ function renderResultRows() {
     const previewButton = contentMatched
       ? `<button class="secondary row-action" type="button" data-preview-id="${escapeAttribute(result.id)}" aria-label="${escapeAttribute(result.name)}の内容をプレビュー">プレビュー</button>`
       : "";
+    const openLabel = result.kind === "folder" ? "フォルダを開く" : "ファイルを開く";
     row.innerHTML = `
       <td><span class="kind-pill ${result.kind}">${result.kind === "folder" ? "フォルダ" : "ファイル"}</span></td>
       <td class="name-cell truncate">${name}</td>
@@ -395,7 +396,7 @@ function renderResultRows() {
       <td>${matches}</td>
       <td>${result.kind === "folder" ? "-" : formatBytes(result.size)}</td>
       <td>${formatDate(result.modifiedAt)}</td>
-      <td><div class="row-actions">${previewButton}<button class="secondary row-action" type="button" data-copy="${escapeAttribute(result.path)}">コピー</button></div></td>
+      <td><div class="row-actions"><button class="secondary row-action" type="button" data-open-id="${escapeAttribute(result.id)}" aria-label="${escapeAttribute(result.name)}の${openLabel}">開く</button>${previewButton}<button class="secondary row-action" type="button" data-copy="${escapeAttribute(result.path)}">コピー</button></div></td>
     `;
     elements.resultsBody.append(row);
   }
@@ -1079,6 +1080,20 @@ elements.tabButtons.forEach((button) => {
 document.addEventListener("click", async (event) => {
   const target = event.target.closest("button");
   if (!target) {
+    return;
+  }
+
+  const openId = target.dataset.openId;
+  if (openId) {
+    const result = state.results.find((item) => item.id === openId);
+    if (result) {
+      try {
+        await callBackend("OpenResult", result.path);
+        setStatus(result.kind === "folder" ? "フォルダを開きました" : "ファイルを開きました");
+      } catch (error) {
+        setStatus(errorMessage(error));
+      }
+    }
     return;
   }
 

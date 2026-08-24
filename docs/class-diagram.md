@@ -32,9 +32,11 @@ classDiagram
         -sync.Mutex searchMu
         -context.CancelFunc searchCancel
         -uint64 searchGeneration
+        -openPath(path, isDirectory) error
         +BrowseFolder() string
         +Search(request SearchRequest) SearchResponse
         +PreviewFile(request FilePreviewRequest) FilePreview
+        +OpenResult(path string) void
         +CancelSearch() bool
         +GetHistory() HistoryEntry[]
         +ClearHistory() HistoryEntry[]
@@ -174,6 +176,12 @@ classDiagram
         +Office Open XML files
     }
 
+    class SystemPathOpener {
+        <<external>>
+        +default application
+        +Windows Explorer
+    }
+
     FrontendController ..> App : Wails API
     FrontendController ..> SearchRequest : 構築と復元
     FrontendController ..> SearchResponse : 描画
@@ -184,6 +192,7 @@ classDiagram
     App ..> SearchRequest
     App ..> SearchResponse
     App ..> PreviewEngine : 一致抜粋の取得
+    App ..> SystemPathOpener : 検索結果を開く
     App ..> FilePreviewRequest
     App ..> FilePreview
     SearchEngine ..> OfficeDocumentScanner : Office本文解析
@@ -210,6 +219,7 @@ classDiagram
 | `FrontendController` | `App` | `window.go.main.App`を介して公開メソッドを呼び出す。 |
 | `App` | `SearchEngine` | 検索コンテキストを作り、検索結果を受け取る。 |
 | `App` | `PreviewEngine` | ファイルを再読み込みし、一致抜粋を受け取る。 |
+| `App` | `SystemPathOpener` | 存在と種別を確認した検索結果を既定アプリまたはExplorerで開く。 |
 | `App` | `Store` | 成功した検索だけを履歴へ保存し、履歴とブックマークの操作を委譲する。 |
 | `SearchEngine` | `OfficeDocumentScanner` | 対応するOffice Open XML形式の本文解析を委譲する。 |
 | `Store` | `StateFile` | ユーザー設定ディレクトリのJSONファイルを一時ファイル経由で置換する。 |
