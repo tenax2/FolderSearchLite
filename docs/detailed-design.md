@@ -21,11 +21,12 @@
 | `search.go` | 検索要求、応答、履歴の型とファイルシステム検索を実装する。 |
 | `preview.go` | プレビューの型と、プレーンテキストの一致抜粋取得を実装する。 |
 | `office.go` | Office Open XML文書のZIPパーツ選択とXML本文検索を実装する。 |
-| `store.go` | 履歴とブックマークのメモリ管理とJSON永続化を実装する。 |
+| `store.go` | 履歴、ブックマーク、お気に入りフォルダーのメモリ管理とJSON永続化を実装する。 |
+| `store_test.go` | お気に入りフォルダーの永続化、重複排除、入力検証、旧JSON互換性を検証する。 |
 | `search_test.go` | 検索信頼性とキャンセル制御を検証する。 |
 | `preview_test.go` | プレビューの大小文字条件、件数上限、Office文書取得を検証する。 |
 | `open_test.go` | 開く対象の種別判定、存在確認、OS起動エラーの伝播を検証する。 |
-| `frontend/dist/index.html` | タブ、検索フォーム、結果グリッド、プレビューダイアログ、保存一覧のDOM構造を定義する。 |
+| `frontend/dist/index.html` | タブ、検索フォーム、お気に入りフォルダー、結果グリッド、プレビューダイアログ、保存一覧のDOM構造を定義する。 |
 | `frontend/dist/styles.css` | 画面配置、結果グリッド、強調色、プレビュー、レスポンシブ表示を定義する。 |
 | `frontend/dist/main.js` | UI状態、Wails API呼び出し、描画、強調表示、プレビュー、フィルター、ソート、イベントを実装する。 |
 | `wails.json` | Wailsプロジェクト名、アセット、出力ファイル名を定義する。 |
@@ -52,7 +53,7 @@
 ブラウザーが`main.js`を読み込むと、DOM参照とイベントを登録して`refreshSavedLists`を実行する。
 
 初期処理では検索を実行しない。
-履歴とブックマークだけをバックエンドから取得する。
+履歴、ブックマーク、お気に入りフォルダーだけをバックエンドから取得する。
 
 ## Wails公開API
 
@@ -70,6 +71,9 @@
 | `BookmarkHistory` | 履歴ID | 更新後の`HistoryEntry[]` | 履歴ID不存在、状態ファイル読み書き失敗 |
 | `GetBookmarks` | なし | `HistoryEntry[]` | 状態ファイル読み込み失敗 |
 | `RemoveBookmark` | ブックマークID | 更新後の`HistoryEntry[]` | 状態ファイル読み書き失敗 |
+| `AddFavoriteFolder` | フォルダーパス | 更新後の`FavoriteFolder[]` | 空パス、対象不存在、非フォルダー、状態ファイル読み書き失敗 |
+| `GetFavoriteFolders` | なし | `FavoriteFolder[]` | 状態ファイル読み込み失敗 |
+| `RemoveFavoriteFolder` | お気に入りID | 更新後の`FavoriteFolder[]` | 状態ファイル読み書き失敗 |
 
 ### Searchの処理順序
 
@@ -125,6 +129,8 @@ sequenceDiagram
 | `RootPath` | `rootPath` | string | 前後空白を除去して`filepath.Clean`を適用する。 |
 | `Query` | `query` | string | 前後空白を除去する。大小区別なしでは照合時に小文字化する。 |
 | `Extensions` | `extensions` | string[] | 小文字、ピリオド付き、重複なし、辞書順へ変換する。 |
+| `ExcludedFileNames` | `excludedFileNames` | string[] | 前後空白と大小文字違いの重複を除き、完全一致の除外条件として使用する。 |
+| `ExcludedExtensions` | `excludedExtensions` | string[] | `Extensions`と同じ形式へ正規化し、対象拡張子より優先して除外する。 |
 | `IncludeNames` | `includeNames` | bool | 旧履歴との互換フィールドとして使用する。 |
 | `IncludeFileNames` | `includeFileNames` | bool | ファイル名照合を有効化する。 |
 | `IncludeFolderNames` | `includeFolderNames` | bool | フォルダ名照合を有効化する。 |
@@ -193,12 +199,19 @@ sequenceDiagram
 | フィールド | JSON名 | 内容 |
 |---|---|---|
 | `ID` | `id` | `search-`とUnixナノ秒から作るローカルID |
-| `Label` | `label` | 検索語と拡張子を` / `で連結した表示名。条件なしは`all`。 |
+| `Label` | `label` | 検索語と対象拡張子に除外条件を加え、` / `で連結した表示名。対象条件なしは`all`。 |
 | `Request` | `request` | 再検索用の正規化済み要求 |
 | `ResultCount` | `resultCount` | 検索時の結果件数 |
 | `SearchedAt` | `searchedAt` | 検索開始時刻 |
 | `DurationMs` | `durationMs` | 検索処理時間 |
 | `Bookmarked` | `bookmarked` | 対応ブックマークの有無 |
+
+### FavoriteFolder
+
+| フィールド | JSON名 | 内容 |
+|---|---|---|
+| `ID` | `id` | `folder-`とUnixナノ秒から作る解除用ローカルID |
+| `Path` | `path` | 登録時に検証し、`filepath.Abs`と`filepath.Clean`を適用した絶対パス |
 
 ## 検索アルゴリズム
 
@@ -206,10 +219,11 @@ sequenceDiagram
 
 1. 検索ルートの空白を除き、OS形式のパスへ正規化する。
 2. 検索語の前後空白を除く。
-3. 拡張子を小文字かつピリオド付きへ統一し、空要素と重複を除く。
-4. 旧互換フラグを個別のファイル名、フォルダ名フラグへ変換する。
-5. 検索対象が一つもない場合はファイル名検索を有効にする。
-6. 結果上限を1件から5000件の実装範囲へ補正する。
+3. 対象・除外拡張子を小文字かつピリオド付きへ統一し、空要素と重複を除く。
+4. 除外ファイル名の前後空白と大小文字違いの重複を除く。
+5. 旧互換フラグを個別のファイル名、フォルダ名フラグへ変換する。
+6. 検索対象が一つもない場合はファイル名検索を有効にする。
+7. 結果上限を1件から5000件の実装範囲へ補正する。
 
 ### ルートの検証
 
@@ -220,17 +234,19 @@ sequenceDiagram
 
 ### 走査と照合
 
-1. 明示された拡張子集合と、実際に走査する対象拡張子集合を作る。
+1. 明示された拡張子集合、実際に走査する対象拡張子集合、ファイル名と拡張子の除外集合を作る。
 2. `filepath.WalkDir`でルート配下を逐次走査する。
 3. 各コールバックの先頭でコンテキストを確認する。
-4. 個別の走査エラーまたはメタデータ取得エラーを`UnreadableItems`へ加算する。
-5. 対象拡張子集合に含まれないファイルを早期除外する。
-6. 拡張子、ファイル名、フォルダ名、本文の順に一致理由を蓄積する。
-7. 一致理由がない項目を除外する。
-8. `SearchResult`を生成する。
-9. 結果上限へ到達した場合は`filepath.SkipAll`で正常終了する。
-10. 種別、相対パスの順に安定ソートする。
-11. 同じ要求を保持する`HistoryEntry`を生成する。
+4. 個別の走査エラーを`UnreadableItems`へ加算する。
+5. 除外ファイル名または除外拡張子に一致するファイルを、メタデータ取得前に除外する。
+6. メタデータ取得エラーを`UnreadableItems`へ加算し、取得に成功した項目の走査統計を更新する。
+7. 対象拡張子集合に含まれないファイルを早期除外する。
+8. 拡張子、ファイル名、フォルダ名、本文の順に一致理由を蓄積する。
+9. 一致理由がない項目を除外する。
+10. `SearchResult`を生成する。
+11. 結果上限へ到達した場合は`filepath.SkipAll`で正常終了する。
+12. 種別、相対パスの順に安定ソートする。
+13. 同じ要求を保持する`HistoryEntry`を生成する。
 
 ### 名前照合
 
@@ -352,7 +368,13 @@ sequenceDiagram
       "bookmarked": true
     }
   ],
-  "bookmarks": []
+  "bookmarks": [],
+  "favoriteFolders": [
+    {
+      "id": "folder-...",
+      "path": "C:\\Projects\\sample"
+    }
+  ]
 }
 ```
 
@@ -365,6 +387,7 @@ sequenceDiagram
 
 状態ファイルが存在しない、または0バイトの場合は空状態として扱う。
 JSONが不正な場合は呼び出し元へエラーを返す。
+旧状態ファイルに`favoriteFolders`がない場合は、空配列として読み込む。
 
 ### 保存
 
@@ -392,6 +415,18 @@ JSONが不正な場合は呼び出し元へエラーを返す。
 解除操作は冪等である。
 対象IDが存在しない場合もエラーにしない。
 
+### お気に入りフォルダー
+
+登録時は前後空白を除き、絶対パスへ変換してから`os.Stat`で存在するフォルダーかを確認する。
+通常ファイル、存在しないパス、空パスは保存しない。
+
+新しい登録は配列の先頭へ追加する。
+同じパスがすでに存在する場合はIDを維持して先頭へ移動し、重複を作らない。
+Windowsでは大文字と小文字を区別せず、それ以外のOSでは区別してパスを比較する。
+
+解除はIDで対象を特定し、存在しないIDも正常終了する。
+ファイルシステム上のフォルダーや、画面の検索フォルダー入力は削除しない。
+
 ## フロントエンド状態設計
 
 ### state
@@ -401,6 +436,7 @@ JSONが不正な場合は呼び出し元へエラーを返す。
 | `activeTab` | string | `search`、`history`、`bookmarks`の現在値 |
 | `history` | array | バックエンドから取得した履歴 |
 | `bookmarks` | array | バックエンドから取得したブックマーク |
+| `favoriteFolders` | array | バックエンドから取得したお気に入りフォルダー |
 | `currentHistoryId` | string | 直近検索を保存するための履歴ID |
 | `searching` | boolean | 検索実行中フラグ |
 | `results` | array | バックエンドから受け取った未加工の結果 |
@@ -421,8 +457,9 @@ JSONが不正な場合は呼び出し元へエラーを返す。
 |---|---|---|
 | 状態 | `#statusText` | エラー、検索中、検索結果概要を表示する。 |
 | タブ | `.tab-button`, `.panel` | 選択状態と表示パネルを切り替える。 |
-| 検索条件 | `#rootPath`から`#maxResults` | `SearchRequest`を構築する。 |
+| 検索条件 | `#rootPath`から`#maxResults`、`#advancedSearch` | `SearchRequest`を構築し、除外条件を必要なときだけ展開する。 |
 | 検索操作 | `#searchButton`, `#cancelSearchButton`, `#bookmarkCurrentButton` | 検索、中断、保存を行う。 |
+| お気に入り | `#favoriteFolderSelect`, `#addFavoriteFolderButton`, `#removeFavoriteFolderButton` | 検索フォルダーの選択、登録、解除を行う。 |
 | 結果統計 | `#resultSummary`, `#scanSummary` | 表示件数と走査件数を表示する。 |
 | 結果 | `#resultsBody` | 動的な結果行を保持する。 |
 | フィルター | `.column-filter`, `#clearFiltersButton` | 表示結果を列別に絞り込む。 |
@@ -436,14 +473,29 @@ JSONが不正な場合は呼び出し元へエラーを返す。
 
 `buildRequest`はフォーム値を読み、互換フィールドを含む要求を作る。
 
+除外ファイル名はカンマ、セミコロンで分割し、名前内の空白を保持する。
+除外拡張子は対象拡張子と同じく、カンマ、空白、セミコロンで分割する。
+`applyRequest`は保存済みの除外条件を復元し、いずれかが存在する場合は詳細条件を開く。
+
 `includeNames`はファイル名またはフォルダ名が有効な場合に`true`となる。
 `includeDirectories`はフォルダ名フラグと同じ値を持つ。
 
 ### 検索中のUI制御
 
-`setSearching(true)`は検索ボタンと参照ボタンを無効化し、中断ボタンを有効化する。
+`setSearching(true)`は検索ボタン、参照ボタン、お気に入り操作を無効化し、中断ボタンを有効化する。
 
 検索成功、失敗、キャンセルのいずれでも、`runSearch`の`finally`が`setSearching(false)`を呼ぶ。
+
+### お気に入りフォルダー操作
+
+`refreshSavedLists`は履歴、ブックマーク、お気に入りフォルダーを並行取得する。
+`renderFavoriteFolders`は保存済みパスを`option.textContent`へ設定し、現在の選択IDまたは入力パスと一致する項目を復元する。
+
+一覧の変更時は選択項目のパスを`rootPath`へ反映するが、検索は自動実行しない。
+パスの手入力またはフォルダー参照時も、一致するお気に入りがあれば選択状態を同期する。
+
+登録後はバックエンドが返した先頭項目の正規化済みパスとIDを入力・選択へ反映する。
+解除後も`rootPath`は維持し、お気に入り一覧だけを再描画する。
 
 ### 一致語の強調表示
 
@@ -508,6 +560,8 @@ JSONが不正な場合は呼び出し元へエラーを返す。
 ファイル名、パス、本文プレビュー、履歴ラベルは`escapeHtml`を通す。
 強調表示も一致区間と非一致区間をエスケープした後で、実装側が生成する`mark`要素だけを追加する。
 
+お気に入りフォルダーのパスはHTML文字列へ連結せず、`option.textContent`で設定する。
+
 `data-*`属性へ入れる値は`escapeAttribute`を通し、HTML特殊文字とバッククォートを置換する。
 
 ### 動的ボタンのイベント委譲
@@ -528,30 +582,36 @@ JSONが不正な場合は呼び出し元へエラーを返す。
 
 ### 1400px超
 
-検索フォームは次の6列である。
+通常の検索フォームは次の6列であり、お気に入りと詳細条件はそれぞれ下の全幅行へ配置する。
 
 ```text
 フォルダ | 文字列 | 拡張子 | チェック項目 | 上限 | 操作
+お気に入りフォルダー
+詳細条件（除外ファイル名、除外拡張子）
 ```
 
 ### 1081px以上1400px以下
 
-CSS Gridの領域名を使って次の2行へ配置する。
+CSS Gridの領域名を使って次の4行へ配置する。
 
 ```text
 path     | query    | extensions | max
 controls | controls | actions    | actions
+favorites| favorites| favorites  | favorites
+advanced | advanced | advanced   | advanced
 ```
 
 ### 1080px以下
 
-ヘッダーを縦積みにし、フォームを次の4行へ配置する。
+ヘッダーを縦積みにし、フォームを次の6行へ配置する。
 
 ```text
 path     | path
 query    | extensions
 controls | controls
 max      | actions
+favorites| favorites
+advanced | advanced
 ```
 
 ## エラー伝播
@@ -563,6 +623,7 @@ max      | actions
 | 本文読み取り | キャンセル以外は`UnreadableItems`へ加算する。 | 検索完了時の詳細へ件数を表示する。 |
 | `PreviewFile`の読み取り | エラーをWailsへ返す。 | ダイアログ内にエラーと検索時の抜粋を表示する。 |
 | `OpenResult`の存在確認、OS起動 | エラーをWailsへ返す。 | 状態欄へ表示する。 |
+| お気に入り登録時のパス検証 | 不正なパスを保存せず、エラーをWailsへ返す。 | 状態欄へ表示する。 |
 | `context.Canceled` | `App.Search`が「検索を中断しました」へ変換する。 | 状態欄へ表示する。 |
 | Store読み書き | エラーをWailsへ返す。 | 状態欄へ表示する。 |
 | Wails API不存在 | `callBackend`がErrorを生成する。 | 状態欄へ表示する。 |
@@ -585,10 +646,14 @@ max      | actions
 | `TestOpenResultUsesExplorerForFolder` | フォルダが存在する。 | 結果を開く。 | 絶対パスとフォルダ種別をOSオープナーへ渡す。 |
 | `TestOpenResultRejectsMissingPath` | 対象が存在しない。 | 結果を開く。 | エラーを返し、OSオープナーを呼ばない。 |
 | `TestOpenResultReturnsOpenerError` | OSオープナーが失敗する。 | 結果を開く。 | OS側のエラーを呼び出し元へ返す。 |
+| `TestFavoriteFolderLifecyclePersistsAndDeduplicates` | 二つのフォルダーと状態保存先がある。 | 登録、重複登録、再読込、解除を行う。 | 新しい順とIDを維持し、重複せず永続化する。 |
+| `TestAddFavoriteFolderRejectsInvalidPaths` | 空値、存在しないパス、通常ファイルを用意する。 | 各パスを登録する。 | すべてエラーとなり保存しない。 |
+| `TestGetFavoriteFoldersLoadsLegacyState` | `favoriteFolders`がない旧JSONがある。 | お気に入り一覧を取得する。 | エラーなく空配列を返す。 |
 
 ## 実装上の注意
 
-- `Store.copyHistory`はスライス本体の浅いコピーである。`HistoryEntry.Request.Extensions`を呼び出し元が変更しない前提で使用する。
+- `Store.copyHistory`はスライス本体の浅いコピーである。`HistoryEntry.Request`内の各条件スライスを呼び出し元が変更しない前提で使用する。
+- `Store.copyFavoriteFolders`は値型フィールドだけを持つ要素の浅いコピーであり、呼び出し元による配列変更から内部状態を守る。
 - `makeID`は時刻ベースのローカルIDであり、暗号学的な一意性を保証する識別子ではない。
 - サイズ0の空ファイルとフォルダは、バックエンドデータ上では同じサイズ値を持つ。画面では種別を使ってフォルダをハイフン表示する。
 - 日時フィルターは表示後の日本語文字列への部分一致であり、期間検索ではない。

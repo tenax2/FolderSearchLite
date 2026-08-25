@@ -89,6 +89,87 @@ func TestRunSearchCountsUnreadableOfficeDocument(t *testing.T) {
 	}
 }
 
+// TestRunSearchExcludesFileNamesAndExtensions は、除外条件が大小文字を区別せず、
+// 名前照合や本文読み取りより先に適用されることを確認する。
+func TestRunSearchExcludesFileNamesAndExtensions(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	files := map[string]string{
+		"keep.txt":   "target",
+		"SECRET.txt": "target",
+		"debug.LOG":  "target",
+	}
+	for name, content := range files {
+		if err := os.WriteFile(filepath.Join(root, name), []byte(content), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	response, history, err := RunSearch(SearchRequest{
+		RootPath: root,
+		Query:    "target",
+		Extensions: []string{
+			"txt",
+			"log",
+		},
+		ExcludedFileNames: []string{" secret.TXT ", "SECRET.txt"},
+		ExcludedExtensions: []string{
+			"log",
+			".LOG",
+		},
+		IncludeContents: true,
+		MaxResults:      10,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(response.Results) != 1 || response.Results[0].Name != "keep.txt" {
+		t.Fatalf("expected only keep.txt, got %#v", response.Results)
+	}
+	if response.FilesScanned != 1 {
+		t.Fatalf("expected excluded files not to be scanned, got %d scanned files", response.FilesScanned)
+	}
+	if len(history.Request.ExcludedFileNames) != 1 || history.Request.ExcludedFileNames[0] != "secret.TXT" {
+		t.Fatalf("unexpected normalized excluded file names: %v", history.Request.ExcludedFileNames)
+	}
+	if len(history.Request.ExcludedExtensions) != 1 || history.Request.ExcludedExtensions[0] != ".log" {
+		t.Fatalf("unexpected normalized excluded extensions: %v", history.Request.ExcludedExtensions)
+	}
+	if !strings.Contains(history.Label, "除外名: secret.TXT") || !strings.Contains(history.Label, "除外拡張子: .log") {
+		t.Fatalf("expected exclusion conditions in history label, got %q", history.Label)
+	}
+}
+
+// TestRunSearchFileNameExclusionDoesNotSkipFolder は、同名フォルダを除外せず、
+// 配下の検索も継続することを確認する。
+func TestRunSearchFileNameExclusionDoesNotSkipFolder(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	directory := filepath.Join(root, "secret.txt")
+	if err := os.Mkdir(directory, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(directory, "keep.txt"), []byte("target"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	response, _, err := RunSearch(SearchRequest{
+		RootPath:          root,
+		Query:             "target",
+		ExcludedFileNames: []string{"secret.txt"},
+		IncludeContents:   true,
+		MaxResults:        10,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(response.Results) != 1 || response.Results[0].Name != "keep.txt" {
+		t.Fatalf("expected search to continue below the same-named folder, got %#v", response.Results)
+	}
+}
+
 // TestAppCancelSearchCancelsActiveContext は、CancelSearchが実行中コンテキストを停止し、
 // 同じ検索へ二度目のキャンセルを行わないことを確認する。
 func TestAppCancelSearchCancelsActiveContext(t *testing.T) {
