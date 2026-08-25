@@ -79,6 +79,35 @@
             <button id="cancelSearchButton" class="secondary" type="button" disabled>中断</button>
             <button id="bookmarkCurrentButton" class="secondary" type="button" disabled>保存</button>
           </div>
+
+          <!-- よく使う検索ルートを永続化し、フォルダーダイアログを開かずに再選択できるようにする。 -->
+          <div class="favorite-folders">
+            <label class="favorite-folder-label" for="favoriteFolderSelect">お気に入りフォルダー</label>
+            <select id="favoriteFolderSelect" aria-describedby="favoriteFolderHelp">
+              <option value="">登録なし</option>
+            </select>
+            <button id="addFavoriteFolderButton" class="secondary" type="button" disabled>現在のフォルダーを登録</button>
+            <button id="removeFavoriteFolderButton" class="secondary danger" type="button" disabled>解除</button>
+            <span id="favoriteFolderHelp" class="field-help">選択すると検索対象のフォルダーへ反映します。</span>
+          </div>
+
+          <!-- 使用頻度の低い除外条件は、必要なときだけ展開できる詳細領域へまとめる。 -->
+          <details id="advancedSearch" class="advanced-search">
+            <summary>詳細な検索条件</summary>
+            <div class="advanced-fields">
+              <label class="field">
+                <span>除外するファイル名</span>
+                <input id="excludedFileNames" name="excludedFileNames" type="text" autocomplete="off" placeholder="Thumbs.db, .DS_Store" />
+                <span class="field-help">カンマまたはセミコロンで区切って指定します。完全一致で、大小文字は区別しません。</span>
+              </label>
+
+              <label class="field">
+                <span>除外する拡張子</span>
+                <input id="excludedExtensions" name="excludedExtensions" type="text" autocomplete="off" placeholder=".tmp, .log, bak" />
+                <span class="field-help">カンマ、空白、セミコロンで区切って指定します。先頭のピリオドは省略できます。</span>
+              </label>
+            </div>
+          </details>
         </form>
 
         <!-- 左側は表示件数、右側はバックエンドが返す走査対象数を表示する。 -->

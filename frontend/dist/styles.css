@@ -283,7 +283,7 @@ h2 {
 /*
  * 検索条件フォーム
  *
- * 1400pxを超える画面では全条件を一行へ配置する。
+ * 1400pxを超える画面では通常条件を一行、詳細条件を全幅の次行へ配置する。
  * 各minmax値は入力内容を読める下限と、余剰幅の配分比率を表す。
  */
 .search-form {
@@ -309,6 +309,13 @@ h2 {
 .field input {
   color: var(--text);
   font-weight: 400;
+}
+
+.field-help {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 1.45;
 }
 
 .input-row {
@@ -343,6 +350,55 @@ h2 {
   display: flex;
   gap: 8px;
   justify-content: flex-end;
+}
+
+/* お気に入りフォルダーは通常条件の直下で、選択、登録、解除を一続きに配置する。 */
+.favorite-folders {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: max-content minmax(280px, 1fr) max-content max-content;
+  gap: 6px 8px;
+  align-items: center;
+  border-top: 1px solid var(--line);
+  padding-top: 10px;
+}
+
+.favorite-folder-label {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.favorite-folders .field-help {
+  grid-column: 2 / -1;
+}
+
+/* 除外条件は折りたたみ可能な全幅行とし、通常の検索条件を簡潔に保つ。 */
+.advanced-search {
+  grid-column: 1 / -1;
+  border-top: 1px solid var(--line);
+  padding-top: 10px;
+}
+
+.advanced-search summary {
+  width: max-content;
+  color: var(--heading);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.advanced-search summary:focus-visible {
+  border-radius: 3px;
+  outline: 3px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.advanced-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 12px;
 }
 
 /* 件数と走査統計を結果グリッドの直前で左右に分けて表示する。 */
@@ -740,7 +796,7 @@ tbody tr:hover {
 /*
  * 中間幅レイアウト
  *
- * 条件入力を上段、チェック項目と操作を下段へ分ける。
+ * 条件入力、チェック項目と操作、詳細条件の3段へ分ける。
  * 初期ウィンドウがOSの表示領域に合わせて縮小されても横方向へあふれない。
  */
 @media (max-width: 1400px) {
@@ -748,7 +804,9 @@ tbody tr:hover {
     grid-template-columns: minmax(300px, 1.45fr) minmax(180px, 0.7fr) minmax(160px, 0.55fr) 86px;
     grid-template-areas:
       "path query extensions max"
-      "controls controls actions actions";
+      "controls controls actions actions"
+      "favorites favorites favorites favorites"
+      "advanced advanced advanced advanced";
   }
 
   .path-field {
@@ -775,12 +833,20 @@ tbody tr:hover {
     grid-area: actions;
   }
 
+  .favorite-folders {
+    grid-area: favorites;
+  }
+
+  .advanced-search {
+    grid-area: advanced;
+  }
+
 }
 
 /*
  * 最小幅レイアウト
  *
- * ヘッダーを縦積みにし、フォームを2列4行へ再配置する。
+ * ヘッダーを縦積みにし、通常条件を2列4行、詳細条件を全幅行へ再配置する。
  * WailsのMinWidth付近でも検索条件と操作ボタンを表示可能に保つ。
  */
 @media (max-width: 1080px) {
@@ -818,11 +884,22 @@ tbody tr:hover {
       "path path"
       "query extensions"
       "controls controls"
-      "max actions";
+      "max actions"
+      "favorites favorites"
+      "advanced advanced";
   }
 
   .actions {
     justify-content: flex-start;
+  }
+
+  .favorite-folders {
+    grid-template-columns: minmax(0, 1fr) max-content max-content;
+  }
+
+  .favorite-folder-label,
+  .favorite-folders .field-help {
+    grid-column: 1 / -1;
   }
 
 }

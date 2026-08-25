@@ -34,6 +34,12 @@ type SearchRequest struct {
 	Query string `json:"query"`
 	// Extensions は、先頭のピリオドを省略できる拡張子条件である。
 	Extensions []string `json:"extensions"`
+	// ExcludedFileNames は、検索対象から除外する完全一致のファイル名である。
+	// 大文字と小文字は区別しない。
+	ExcludedFileNames []string `json:"excludedFileNames"`
+	// ExcludedExtensions は、検索対象から除外する拡張子条件である。
+	// Extensionsと同様に先頭のピリオドを省略できる。
+	ExcludedExtensions []string `json:"excludedExtensions"`
 	// IncludeNames は、旧クライアントが名前検索を指定するための互換フィールドである。
 	IncludeNames bool `json:"includeNames"`
 	// IncludeFileNames は、ファイル名をQueryと照合するかを示す。
@@ -106,7 +112,7 @@ type SearchResponse struct {
 type HistoryEntry struct {
 	// ID は、履歴とブックマークを関連付ける永続IDである。
 	ID string `json:"id"`
-	// Label は、検索語と拡張子から生成する一覧表示用ラベルである。
+	// Label は、検索語、対象拡張子、除外条件から生成する一覧表示用ラベルである。
 	Label string `json:"label"`
 	// Request は、再検索時に復元する正規化済み検索条件である。
 	Request SearchRequest `json:"request"`
@@ -147,10 +153,12 @@ func RunSearchContext(ctx context.Context, request SearchRequest) (SearchRespons
 		return SearchResponse{}, HistoryEntry{}, errors.New("folder path must be a directory")
 	}
 
-	// 明示拡張子は一致理由の判定に使い、対象拡張子は走査対象の早期除外に使う。
+	// 明示拡張子は一致理由の判定に使い、対象拡張子と除外条件は走査対象の早期判定に使う。
 	// Office検索では、明示条件にOffice拡張子を加えた集合が対象拡張子になる。
 	explicitExtensionSet := makeExtensionSet(request.Extensions)
 	targetExtensionSet := makeTargetExtensionSet(request.Extensions, request.IncludeOfficeDocuments)
+	excludedFileNameSet := makeFileNameSet(request.ExcludedFileNames)
+	excludedExtensionSet := makeExtensionSet(request.ExcludedExtensions)
 	needle := request.Query
 	if !request.CaseSensitive {
 		needle = strings.ToLower(needle)
@@ -180,6 +188,14 @@ func RunSearchContext(ctx context.Context, request SearchRequest) (SearchRespons
 			return nil
 		}
 
+		// ファイルの除外条件はメタデータ取得や本文読み取りより前に適用する。
+		// フォルダ名が同じ場合は配下の走査を継続する。
+		isDirectory := dirEntry.IsDir()
+		ext := strings.ToLower(filepath.Ext(path))
+		if !isDirectory && (excludedFileNameSet[strings.ToLower(dirEntry.Name())] || excludedExtensionSet[ext]) {
+			return nil
+		}
+
 		info, err := dirEntry.Info()
 		if err != nil {
 			response.UnreadableItems++
@@ -187,7 +203,6 @@ func RunSearchContext(ctx context.Context, request SearchRequest) (SearchRespons
 		}
 
 		response.TotalVisited++
-		isDirectory := dirEntry.IsDir()
 		if isDirectory {
 			response.DirectoriesScanned++
 		} else {
@@ -195,7 +210,6 @@ func RunSearchContext(ctx context.Context, request SearchRequest) (SearchRespons
 		}
 
 		// 対象外拡張子は、名前照合やファイルオープンより前に除外してI/Oを抑える。
-		ext := strings.ToLower(filepath.Ext(path))
 		if !isDirectory && len(targetExtensionSet) > 0 && !targetExtensionSet[ext] {
 			return nil
 		}
@@ -287,11 +301,13 @@ func RunSearchContext(ctx context.Context, request SearchRequest) (SearchRespons
 }
 
 // normalizeRequest は、検索条件を走査処理が前提とする形式へ変換する。
-// パス、検索語、拡張子、互換フィールド、既定の結果上限を一箇所で確定させる。
+// パス、検索語、対象・除外条件、互換フィールド、既定の結果上限を一箇所で確定させる。
 func normalizeRequest(request SearchRequest) SearchRequest {
 	request.RootPath = filepath.Clean(strings.TrimSpace(request.RootPath))
 	request.Query = strings.TrimSpace(request.Query)
 	request.Extensions = normalizeExtensions(request.Extensions)
+	request.ExcludedFileNames = normalizeFileNames(request.ExcludedFileNames)
+	request.ExcludedExtensions = normalizeExtensions(request.ExcludedExtensions)
 
 	if request.IncludeNames && !request.IncludeFileNames && !request.IncludeFolderNames {
 		// 個別フラグ導入前に保存された履歴を、現在のファイル名とフォルダ名条件へ移行する。
@@ -334,11 +350,40 @@ func normalizeExtensions(extensions []string) []string {
 	return normalized
 }
 
+// normalizeFileNames は、除外ファイル名の前後空白と大小文字違いの重複を除く。
+// 表示用の表記は最初の入力を保ち、履歴の再現性を保つため大小文字を無視した辞書順で返す。
+func normalizeFileNames(fileNames []string) []string {
+	seen := map[string]bool{}
+	normalized := make([]string, 0, len(fileNames))
+	for _, fileName := range fileNames {
+		fileName = strings.TrimSpace(fileName)
+		key := strings.ToLower(fileName)
+		if fileName == "" || seen[key] {
+			continue
+		}
+		seen[key] = true
+		normalized = append(normalized, fileName)
+	}
+	sort.Slice(normalized, func(i, j int) bool {
+		return strings.ToLower(normalized[i]) < strings.ToLower(normalized[j])
+	})
+	return normalized
+}
+
 // makeExtensionSet は、拡張子スライスを定数時間で参照できる集合へ変換する。
 func makeExtensionSet(extensions []string) map[string]bool {
 	set := make(map[string]bool, len(extensions))
 	for _, extension := range extensions {
 		set[extension] = true
+	}
+	return set
+}
+
+// makeFileNameSet は、正規化済みの除外ファイル名を大小文字を区別しない集合へ変換する。
+func makeFileNameSet(fileNames []string) map[string]bool {
+	set := make(map[string]bool, len(fileNames))
+	for _, fileName := range fileNames {
+		set[strings.ToLower(fileName)] = true
 	}
 	return set
 }
@@ -545,7 +590,7 @@ func sortResults(results []SearchResult) {
 }
 
 // makeHistoryLabel は、履歴一覧で検索条件を識別できる短いラベルを作る。
-// 検索語も拡張子もない場合はallを使用する。
+// 検索語も拡張子もない場合はallを使用し、除外条件はその後ろへ付加する。
 func makeHistoryLabel(request SearchRequest) string {
 	parts := []string{}
 	if request.Query != "" {
@@ -556,6 +601,12 @@ func makeHistoryLabel(request SearchRequest) string {
 	}
 	if len(parts) == 0 {
 		parts = append(parts, "all")
+	}
+	if len(request.ExcludedFileNames) > 0 {
+		parts = append(parts, "除外名: "+strings.Join(request.ExcludedFileNames, ", "))
+	}
+	if len(request.ExcludedExtensions) > 0 {
+		parts = append(parts, "除外拡張子: "+strings.Join(request.ExcludedExtensions, ", "))
 	}
 	return strings.Join(parts, " / ")
 }

@@ -17,7 +17,7 @@ import (
 type App struct {
 	// ctx は、Wailsの起動時に受け取るアプリケーションライフサイクルのコンテキストである。
 	ctx context.Context
-	// store は、検索履歴とブックマークの永続化を担当する。
+	// store は、検索履歴、ブックマーク、お気に入りフォルダーの永続化を担当する。
 	store *Store
 	// searchMu は、searchCancelとsearchGenerationを直列化する。
 	searchMu sync.Mutex
@@ -199,4 +199,19 @@ func (a *App) GetBookmarks() ([]HistoryEntry, error) {
 // RemoveBookmark は、指定IDのブックマークを解除する。
 func (a *App) RemoveBookmark(id string) ([]HistoryEntry, error) {
 	return a.store.RemoveBookmark(id)
+}
+
+// AddFavoriteFolder は、指定したフォルダーを検索ルートのお気に入りへ登録する。
+func (a *App) AddFavoriteFolder(path string) ([]FavoriteFolder, error) {
+	return a.store.AddFavoriteFolder(path)
+}
+
+// GetFavoriteFolders は、保存済みのお気に入りフォルダーを返す。
+func (a *App) GetFavoriteFolders() ([]FavoriteFolder, error) {
+	return a.store.GetFavoriteFolders()
+}
+
+// RemoveFavoriteFolder は、指定IDのお気に入りフォルダーを解除する。
+func (a *App) RemoveFavoriteFolder(id string) ([]FavoriteFolder, error) {
+	return a.store.RemoveFavoriteFolder(id)
 }

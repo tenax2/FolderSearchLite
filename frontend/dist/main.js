@@ -4,7 +4,7 @@
  * Folder Search Liteのフロントエンド制御モジュール。
  *
  * Wailsが公開するGo APIを呼び出し、検索条件、結果グリッド、履歴、
- * ブックマークの表示状態を単一ページ内で管理する。
+ * ブックマーク、お気に入りフォルダーの表示状態を単一ページ内で管理する。
  * 外部フレームワークへ依存せず、DOMを直接更新する。
  */
 
@@ -19,6 +19,7 @@
  *   activeTab: string,
  *   history: Array<Object>,
  *   bookmarks: Array<Object>,
+ *   favoriteFolders: Array<Object>,
  *   currentHistoryId: string,
  *   searching: boolean,
  *   results: Array<Object>,
@@ -34,6 +35,7 @@ const state = {
   activeTab: "search",
   history: [],
   bookmarks: [],
+  favoriteFolders: [],
   currentHistoryId: "",
   searching: false,
   results: [],
@@ -83,6 +85,9 @@ const elements = {
   rootPath: document.querySelector("#rootPath"),
   query: document.querySelector("#query"),
   extensions: document.querySelector("#extensions"),
+  advancedSearch: document.querySelector("#advancedSearch"),
+  excludedFileNames: document.querySelector("#excludedFileNames"),
+  excludedExtensions: document.querySelector("#excludedExtensions"),
   includeFileNames: document.querySelector("#includeFileNames"),
   includeFolderNames: document.querySelector("#includeFolderNames"),
   includeContents: document.querySelector("#includeContents"),
@@ -90,6 +95,9 @@ const elements = {
   caseSensitive: document.querySelector("#caseSensitive"),
   maxResults: document.querySelector("#maxResults"),
   browseButton: document.querySelector("#browseButton"),
+  favoriteFolderSelect: document.querySelector("#favoriteFolderSelect"),
+  addFavoriteFolderButton: document.querySelector("#addFavoriteFolderButton"),
+  removeFavoriteFolderButton: document.querySelector("#removeFavoriteFolderButton"),
   searchButton: document.querySelector("#searchButton"),
   cancelSearchButton: document.querySelector("#cancelSearchButton"),
   bookmarkCurrentButton: document.querySelector("#bookmarkCurrentButton"),
@@ -110,6 +118,7 @@ const elements = {
 };
 
 const THEME_STORAGE_KEY = "folder-search-lite-theme";
+const FAVORITE_PATHS_CASE_INSENSITIVE = /Windows/i.test(navigator.userAgent);
 
 /**
  * 指定テーマを画面へ反映し、切替ボタンの押下状態を同期する。
@@ -185,6 +194,7 @@ function setSearching(searching) {
   elements.browseButton.disabled = searching;
   elements.cancelSearchButton.disabled = !searching;
   elements.searchButton.textContent = searching ? "検索中" : "検索";
+  updateFavoriteFolderControls();
 }
 
 /**
@@ -214,6 +224,20 @@ function parseExtensions(value) {
 }
 
 /**
+ * 除外ファイル名入力欄を、ファイル名内の空白を保った文字列配列へ分解する。
+ * カンマとセミコロンを主な区切りとし、大小文字違いの重複除去はバックエンドへ委ねる。
+ *
+ * @param {string} value 除外ファイル名入力欄の文字列。
+ * @returns {string[]} 入力順を保ったファイル名配列。
+ */
+function parseFileNames(value) {
+  return value
+    .split(/[,;\r\n]+/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+/**
  * 現在の検索フォームからバックエンド用の要求オブジェクトを構築する。
  *
  * includeNamesとincludeDirectoriesは古い履歴形式との互換性のため、
@@ -229,6 +253,8 @@ function buildRequest() {
     rootPath: elements.rootPath.value.trim(),
     query: elements.query.value.trim(),
     extensions: parseExtensions(elements.extensions.value),
+    excludedFileNames: parseFileNames(elements.excludedFileNames.value),
+    excludedExtensions: parseExtensions(elements.excludedExtensions.value),
     includeNames: includeFileNames || includeFolderNames,
     includeFileNames,
     includeFolderNames,
@@ -253,30 +279,161 @@ function applyRequest(request) {
   elements.rootPath.value = request.rootPath || "";
   elements.query.value = request.query || "";
   elements.extensions.value = (request.extensions || []).join(", ");
+  elements.excludedFileNames.value = (request.excludedFileNames || []).join(", ");
+  elements.excludedExtensions.value = (request.excludedExtensions || []).join(", ");
+  elements.advancedSearch.open = Boolean(
+    request.excludedFileNames?.length || request.excludedExtensions?.length,
+  );
   elements.includeFileNames.checked = request.includeFileNames ?? request.includeNames ?? true;
   elements.includeFolderNames.checked = request.includeFolderNames ?? request.includeDirectories ?? true;
   elements.includeContents.checked = Boolean(request.includeContents);
   elements.includeOfficeDocuments.checked = request.includeOfficeDocuments !== false;
   elements.caseSensitive.checked = Boolean(request.caseSensitive);
   elements.maxResults.value = request.maxResults || 500;
+  syncFavoriteFolderSelection();
+  updateFavoriteFolderControls();
 }
 
 /**
- * 履歴とブックマークを並行取得し、両方の一覧を再描画する。
+ * 二つのパスが、お気に入り選択を同期できる同じ表記かを判定する。
+ * Windowsの通常利用に合わせて大文字と小文字を区別しない。
+ *
+ * @param {unknown} left 比較する一つ目のパス。
+ * @param {unknown} right 比較する二つ目のパス。
+ * @returns {boolean} 前後空白を除いたパス表記が一致する場合はtrue。
+ */
+function sameFavoriteFolderPath(left, right) {
+  const leftPath = String(left ?? "").trim();
+  const rightPath = String(right ?? "").trim();
+  if (FAVORITE_PATHS_CASE_INSENSITIVE) {
+    return leftPath.toLowerCase() === rightPath.toLowerCase();
+  }
+  return leftPath === rightPath;
+}
+
+/**
+ * お気に入りフォルダーを選択肢へ描画し、可能なら指定IDまたは現在の入力パスを選択する。
+ * optionはDOM APIで構築し、保存済みパスをHTMLとして解釈しない。
+ *
+ * @param {string} preferredID 描画後も選択するお気に入りID。
+ * @returns {void}
+ */
+function renderFavoriteFolders(preferredID = elements.favoriteFolderSelect.value) {
+  elements.favoriteFolderSelect.replaceChildren();
+
+  const placeholder = document.createElement("option");
+  placeholder.value = "";
+  placeholder.textContent = state.favoriteFolders.length ? "お気に入りから選択" : "登録なし";
+  elements.favoriteFolderSelect.append(placeholder);
+
+  for (const favorite of state.favoriteFolders) {
+    const option = document.createElement("option");
+    option.value = favorite.id;
+    option.textContent = favorite.path;
+    elements.favoriteFolderSelect.append(option);
+  }
+
+  const preferredExists = state.favoriteFolders.some((favorite) => favorite.id === preferredID);
+  if (preferredExists) {
+    elements.favoriteFolderSelect.value = preferredID;
+  } else {
+    syncFavoriteFolderSelection();
+  }
+  updateFavoriteFolderControls();
+}
+
+/**
+ * 現在の検索フォルダーと同じお気に入りがあれば選択状態へ同期する。
+ *
+ * @returns {void}
+ */
+function syncFavoriteFolderSelection() {
+  const favorite = state.favoriteFolders.find((entry) =>
+    sameFavoriteFolderPath(entry.path, elements.rootPath.value),
+  );
+  elements.favoriteFolderSelect.value = favorite?.id || "";
+}
+
+/**
+ * 検索状態、パス入力、お気に入り件数と選択値から関連コントロールの活性状態を決める。
+ *
+ * @returns {void}
+ */
+function updateFavoriteFolderControls() {
+  const hasFavorites = state.favoriteFolders.length > 0;
+  elements.favoriteFolderSelect.disabled = state.searching || !hasFavorites;
+  elements.addFavoriteFolderButton.disabled = state.searching || !elements.rootPath.value.trim();
+  elements.removeFavoriteFolderButton.disabled = state.searching || !elements.favoriteFolderSelect.value;
+}
+
+/**
+ * 現在の検索フォルダーをバックエンドで検証し、お気に入りへ登録する。
+ * 正規化済みパスを入力欄へ戻し、登録した項目を選択状態にする。
+ *
+ * @returns {Promise<void>}
+ */
+async function addFavoriteFolder() {
+  const path = elements.rootPath.value.trim();
+  if (!path) {
+    setStatus("お気に入りへ登録するフォルダーを入力してください");
+    return;
+  }
+
+  const previousIDs = new Set(state.favoriteFolders.map((favorite) => favorite.id));
+  try {
+    state.favoriteFolders = (await callBackend("AddFavoriteFolder", path)) || [];
+    const favorite = state.favoriteFolders[0];
+    if (favorite) {
+      elements.rootPath.value = favorite.path;
+    }
+    renderFavoriteFolders(favorite?.id || "");
+    setStatus(previousIDs.has(favorite?.id)
+      ? "登録済みのお気に入りフォルダーを選択しました"
+      : "お気に入りフォルダーへ登録しました");
+  } catch (error) {
+    setStatus(errorMessage(error));
+  }
+}
+
+/**
+ * 選択中のお気に入りフォルダーを解除する。検索フォルダー入力自体は維持する。
+ *
+ * @returns {Promise<void>}
+ */
+async function removeFavoriteFolder() {
+  const id = elements.favoriteFolderSelect.value;
+  if (!id) {
+    return;
+  }
+
+  try {
+    state.favoriteFolders = (await callBackend("RemoveFavoriteFolder", id)) || [];
+    renderFavoriteFolders("");
+    setStatus("お気に入りフォルダーを解除しました");
+  } catch (error) {
+    setStatus(errorMessage(error));
+  }
+}
+
+/**
+ * 履歴、ブックマーク、お気に入りフォルダーを並行取得し、各一覧を再描画する。
  * 取得に失敗した場合は既存表示を維持し、状態欄へエラーを表示する。
  *
  * @returns {Promise<void>}
  */
 async function refreshSavedLists() {
   try {
-    const [history, bookmarks] = await Promise.all([
+    const [history, bookmarks, favoriteFolders] = await Promise.all([
       callBackend("GetHistory"),
       callBackend("GetBookmarks"),
+      callBackend("GetFavoriteFolders"),
     ]);
     state.history = history || [];
     state.bookmarks = bookmarks || [];
+    state.favoriteFolders = favoriteFolders || [];
     renderHistory();
     renderBookmarks();
+    renderFavoriteFolders();
   } catch (error) {
     setStatus(errorMessage(error));
   }
@@ -1010,12 +1167,34 @@ elements.browseButton.addEventListener("click", async () => {
     const folder = await callBackend("BrowseFolder");
     if (folder) {
       elements.rootPath.value = folder;
+      syncFavoriteFolderSelection();
+      updateFavoriteFolderControls();
       setStatus("フォルダを選択しました");
     }
   } catch (error) {
     setStatus(errorMessage(error));
   }
 });
+
+// 手入力したパスとお気に入り選択を同期し、空入力時は登録操作を無効化する。
+elements.rootPath.addEventListener("input", () => {
+  syncFavoriteFolderSelection();
+  updateFavoriteFolderControls();
+});
+
+// お気に入りを選ぶと、フォルダーダイアログを介さず検索対象へ反映する。
+elements.favoriteFolderSelect.addEventListener("change", () => {
+  const favorite = state.favoriteFolders.find(
+    (entry) => entry.id === elements.favoriteFolderSelect.value,
+  );
+  if (favorite) {
+    elements.rootPath.value = favorite.path;
+    setStatus("お気に入りからフォルダーを選択しました");
+  }
+  updateFavoriteFolderControls();
+});
+elements.addFavoriteFolderButton.addEventListener("click", addFavoriteFolder);
+elements.removeFavoriteFolderButton.addEventListener("click", removeFavoriteFolder);
 
 // 直近検索の保存操作は、履歴IDの検証をbookmarkCurrentへ委譲する。
 elements.bookmarkCurrentButton.addEventListener("click", bookmarkCurrent);
@@ -1140,5 +1319,6 @@ document.addEventListener("click", async (event) => {
   }
 });
 
-// 初期表示では検索を実行せず、永続化済みの履歴とブックマークだけを読み込む。
+// 初期表示では検索を実行せず、永続化済みの一覧だけを読み込む。
+updateFavoriteFolderControls();
 refreshSavedLists();

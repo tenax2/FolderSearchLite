@@ -3,8 +3,11 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"sync"
 )
 
@@ -18,9 +21,19 @@ type AppState struct {
 	History []HistoryEntry `json:"history"`
 	// Bookmarks は、ユーザーが明示的に保存した検索条件である。
 	Bookmarks []HistoryEntry `json:"bookmarks"`
+	// FavoriteFolders は、検索ルートとして再利用するフォルダーパスである。
+	FavoriteFolders []FavoriteFolder `json:"favoriteFolders"`
 }
 
-// Store は、履歴とブックマークをプロセス内で保持し、JSONファイルへ永続化する。
+// FavoriteFolder は、検索画面から選択できる永続化済みフォルダーを表す。
+type FavoriteFolder struct {
+	// ID は、パスに依存せず解除対象を識別するための永続IDである。
+	ID string `json:"id"`
+	// Path は、登録時に絶対パスへ正規化したフォルダーパスである。
+	Path string `json:"path"`
+}
+
+// Store は、履歴、ブックマーク、お気に入りフォルダーをプロセス内で保持し、JSONファイルへ永続化する。
 // すべての公開操作はmuを取得するため、Wailsから並行して呼ばれても状態を直列に更新する。
 type Store struct {
 	// mu は、path以外の可変状態とファイル読み書きを保護する。
@@ -173,6 +186,68 @@ func (s *Store) RemoveBookmark(id string) ([]HistoryEntry, error) {
 	return copyHistory(s.state.Bookmarks), nil
 }
 
+// AddFavoriteFolder は、存在するフォルダーをお気に入りの先頭へ登録する。
+// すでに同じパスが存在する場合は重複を作らず、対象を先頭へ移動する。
+func (s *Store) AddFavoriteFolder(path string) ([]FavoriteFolder, error) {
+	normalizedPath, err := normalizeFavoriteFolderPath(path)
+	if err != nil {
+		return nil, err
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if err := s.loadLocked(); err != nil {
+		return nil, err
+	}
+
+	entry := FavoriteFolder{
+		ID:   makeID("folder"),
+		Path: normalizedPath,
+	}
+	if index := s.favoriteFolderIndexByPathLocked(normalizedPath); index >= 0 {
+		entry = s.state.FavoriteFolders[index]
+		s.state.FavoriteFolders = append(s.state.FavoriteFolders[:index], s.state.FavoriteFolders[index+1:]...)
+	}
+	s.state.FavoriteFolders = append([]FavoriteFolder{entry}, s.state.FavoriteFolders...)
+
+	if err := s.saveLocked(); err != nil {
+		return nil, err
+	}
+	return copyFavoriteFolders(s.state.FavoriteFolders), nil
+}
+
+// GetFavoriteFolders は、お気に入りフォルダーのスナップショットを返す。
+func (s *Store) GetFavoriteFolders() ([]FavoriteFolder, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if err := s.loadLocked(); err != nil {
+		return nil, err
+	}
+	return copyFavoriteFolders(s.state.FavoriteFolders), nil
+}
+
+// RemoveFavoriteFolder は、指定IDのお気に入りフォルダーを解除する。
+// IDが存在しない場合も冪等な解除として正常終了する。
+func (s *Store) RemoveFavoriteFolder(id string) ([]FavoriteFolder, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if err := s.loadLocked(); err != nil {
+		return nil, err
+	}
+
+	if index := s.favoriteFolderIndexByIDLocked(id); index >= 0 {
+		s.state.FavoriteFolders = append(s.state.FavoriteFolders[:index], s.state.FavoriteFolders[index+1:]...)
+	}
+
+	if err := s.saveLocked(); err != nil {
+		return nil, err
+	}
+	return copyFavoriteFolders(s.state.FavoriteFolders), nil
+}
+
 // loadLocked は、未読み込みの場合だけ状態ファイルを読み込む。
 // 呼び出し元はmuを保持していなければならない。
 // ファイルが存在しない、または空の場合は空状態として正常に扱う。
@@ -244,10 +319,72 @@ func (s *Store) bookmarkIndexLocked(id string) int {
 	return -1
 }
 
+// favoriteFolderIndexByIDLocked は、お気に入りフォルダー内で指定IDが最初に現れる位置を返す。
+// 呼び出し元はmuを保持していなければならず、見つからない場合は-1を返す。
+func (s *Store) favoriteFolderIndexByIDLocked(id string) int {
+	for index, entry := range s.state.FavoriteFolders {
+		if entry.ID == id {
+			return index
+		}
+	}
+	return -1
+}
+
+// favoriteFolderIndexByPathLocked は、OSのパス比較規則で同じフォルダーを探す。
+// Windowsではパスの大文字と小文字を区別せず、それ以外のOSでは区別する。
+func (s *Store) favoriteFolderIndexByPathLocked(path string) int {
+	for index, entry := range s.state.FavoriteFolders {
+		if sameFavoriteFolderPath(entry.Path, path) {
+			return index
+		}
+	}
+	return -1
+}
+
 // copyHistory は、HistoryEntryスライスの浅いコピーを作る。
 // 現在のHistoryEntryが参照型フィールドを変更しない前提で、Storeの配列境界を保護する。
 func copyHistory(entries []HistoryEntry) []HistoryEntry {
 	copied := make([]HistoryEntry, len(entries))
 	copy(copied, entries)
 	return copied
+}
+
+// copyFavoriteFolders は、お気に入りフォルダースライスのコピーを作る。
+func copyFavoriteFolders(entries []FavoriteFolder) []FavoriteFolder {
+	copied := make([]FavoriteFolder, len(entries))
+	copy(copied, entries)
+	return copied
+}
+
+// normalizeFavoriteFolderPath は、入力パスを検証して絶対パスへ正規化する。
+func normalizeFavoriteFolderPath(path string) (string, error) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return "", errors.New("お気に入りへ登録するフォルダーを指定してください")
+	}
+
+	absolutePath, err := filepath.Abs(path)
+	if err != nil {
+		return "", fmt.Errorf("お気に入りフォルダーのパスを解決できません: %w", err)
+	}
+	absolutePath = filepath.Clean(absolutePath)
+
+	info, err := os.Stat(absolutePath)
+	if err != nil {
+		return "", fmt.Errorf("お気に入りフォルダーを確認できません: %w", err)
+	}
+	if !info.IsDir() {
+		return "", errors.New("お気に入りへ登録できるのはフォルダーだけです")
+	}
+	return absolutePath, nil
+}
+
+// sameFavoriteFolderPath は、実行OSのファイルシステムで同一表記となるパスかを判定する。
+func sameFavoriteFolderPath(left, right string) bool {
+	left = filepath.Clean(left)
+	right = filepath.Clean(right)
+	if runtime.GOOS == "windows" {
+		return strings.EqualFold(left, right)
+	}
+	return left == right
 }

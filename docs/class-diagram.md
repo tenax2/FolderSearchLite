@@ -23,6 +23,9 @@ classDiagram
         +openFilePreview(result) Promise
         +highlightText(value, query, caseSensitive) string
         +refreshSavedLists() Promise
+        +renderFavoriteFolders() void
+        +addFavoriteFolder() Promise
+        +removeFavoriteFolder() Promise
         +switchTab(tabName) void
     }
 
@@ -43,6 +46,9 @@ classDiagram
         +BookmarkHistory(id string) HistoryEntry[]
         +GetBookmarks() HistoryEntry[]
         +RemoveBookmark(id string) HistoryEntry[]
+        +AddFavoriteFolder(path string) FavoriteFolder[]
+        +GetFavoriteFolders() FavoriteFolder[]
+        +RemoveFavoriteFolder(id string) FavoriteFolder[]
         -beginSearch() context.Context
         -finishSearch(generation uint64) void
     }
@@ -84,6 +90,9 @@ classDiagram
         +BookmarkHistory(id string) HistoryEntry[]
         +GetBookmarks() HistoryEntry[]
         +RemoveBookmark(id string) HistoryEntry[]
+        +AddFavoriteFolder(path string) FavoriteFolder[]
+        +GetFavoriteFolders() FavoriteFolder[]
+        +RemoveFavoriteFolder(id string) FavoriteFolder[]
         -loadLocked() error
         -saveLocked() error
     }
@@ -91,12 +100,20 @@ classDiagram
     class AppState {
         +HistoryEntry[] History
         +HistoryEntry[] Bookmarks
+        +FavoriteFolder[] FavoriteFolders
+    }
+
+    class FavoriteFolder {
+        +string ID
+        +string Path
     }
 
     class SearchRequest {
         +string RootPath
         +string Query
         +string[] Extensions
+        +string[] ExcludedFileNames
+        +string[] ExcludedExtensions
         +bool IncludeNames
         +bool IncludeFileNames
         +bool IncludeFolderNames
@@ -167,6 +184,7 @@ classDiagram
         <<artifact>>
         +history
         +bookmarks
+        +favoriteFolders
     }
 
     class FileSystem {
@@ -187,6 +205,7 @@ classDiagram
     FrontendController ..> SearchResponse : 描画
     FrontendController ..> FilePreviewRequest : 構築
     FrontendController ..> FilePreview : 描画
+    FrontendController ..> FavoriteFolder : 選択肢を描画
     App *-- Store : 所有
     App ..> SearchEngine : 検索実行
     App ..> SearchRequest
@@ -195,6 +214,7 @@ classDiagram
     App ..> SystemPathOpener : 検索結果を開く
     App ..> FilePreviewRequest
     App ..> FilePreview
+    App ..> FavoriteFolder
     SearchEngine ..> OfficeDocumentScanner : Office本文解析
     SearchEngine ..> FileSystem : 再帰走査と読取
     SearchEngine ..> SearchRequest
@@ -208,6 +228,7 @@ classDiagram
     Store *-- AppState : メモリ状態
     AppState o-- "0..*" HistoryEntry : History
     AppState o-- "0..*" HistoryEntry : Bookmarks
+    AppState o-- "0..*" FavoriteFolder : FavoriteFolders
     HistoryEntry *-- SearchRequest : Request
     Store ..> StateFile : JSON永続化
 ```
@@ -220,7 +241,7 @@ classDiagram
 | `App` | `SearchEngine` | 検索コンテキストを作り、検索結果を受け取る。 |
 | `App` | `PreviewEngine` | ファイルを再読み込みし、一致抜粋を受け取る。 |
 | `App` | `SystemPathOpener` | 存在と種別を確認した検索結果を既定アプリまたはExplorerで開く。 |
-| `App` | `Store` | 成功した検索だけを履歴へ保存し、履歴とブックマークの操作を委譲する。 |
+| `App` | `Store` | 成功した検索だけを履歴へ保存し、履歴、ブックマーク、お気に入りフォルダーの操作を委譲する。 |
 | `SearchEngine` | `OfficeDocumentScanner` | 対応するOffice Open XML形式の本文解析を委譲する。 |
 | `Store` | `StateFile` | ユーザー設定ディレクトリのJSONファイルを一時ファイル経由で置換する。 |
 | `HistoryEntry` | `SearchRequest` | 再検索できるよう、正規化済み検索条件を保持する。 |
@@ -232,7 +253,7 @@ classDiagram
 `FilePreview`は0件から12件の`FilePreviewExcerpt`を持つ。
 
 `AppState`は最大100件の履歴を持つ。
-ブックマークには実装上の件数上限を設けていない。
+ブックマークとお気に入りフォルダーには実装上の件数上限を設けていない。
 
 `App`が保持する実行中検索は最大1件である。
 新しい検索を開始すると、前の検索コンテキストをキャンセルする。
