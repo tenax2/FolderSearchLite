@@ -78,15 +78,16 @@ func (s *Store) AddHistory(entry HistoryEntry) error {
 		return err
 	}
 
-	if s.bookmarkIndexLocked(entry.ID) >= 0 {
-		entry.Bookmarked = true
-	}
+	return s.updateAndSaveLocked(func() {
+		if s.bookmarkIndexLocked(entry.ID) >= 0 {
+			entry.Bookmarked = true
+		}
 
-	s.state.History = append([]HistoryEntry{entry}, s.state.History...)
-	if len(s.state.History) > maxHistoryEntries {
-		s.state.History = s.state.History[:maxHistoryEntries]
-	}
-	return s.saveLocked()
+		s.state.History = append([]HistoryEntry{entry}, s.state.History...)
+		if len(s.state.History) > maxHistoryEntries {
+			s.state.History = s.state.History[:maxHistoryEntries]
+		}
+	})
 }
 
 // GetHistory は、呼び出し元によるスライス変更から内部状態を守るためコピーを返す。
@@ -110,8 +111,9 @@ func (s *Store) ClearHistory() ([]HistoryEntry, error) {
 		return nil, err
 	}
 
-	s.state.History = nil
-	if err := s.saveLocked(); err != nil {
+	if err := s.updateAndSaveLocked(func() {
+		s.state.History = nil
+	}); err != nil {
 		return nil, err
 	}
 	return []HistoryEntry{}, nil
@@ -133,18 +135,18 @@ func (s *Store) BookmarkHistory(id string) ([]HistoryEntry, error) {
 		return nil, errors.New("history entry was not found")
 	}
 
-	entry := s.state.History[index]
-	entry.Bookmarked = true
-	s.state.History[index].Bookmarked = true
+	if err := s.updateAndSaveLocked(func() {
+		entry := s.state.History[index]
+		entry.Bookmarked = true
+		s.state.History[index].Bookmarked = true
 
-	bookmarkIndex := s.bookmarkIndexLocked(id)
-	if bookmarkIndex >= 0 {
-		s.state.Bookmarks[bookmarkIndex] = entry
-	} else {
-		s.state.Bookmarks = append([]HistoryEntry{entry}, s.state.Bookmarks...)
-	}
-
-	if err := s.saveLocked(); err != nil {
+		bookmarkIndex := s.bookmarkIndexLocked(id)
+		if bookmarkIndex >= 0 {
+			s.state.Bookmarks[bookmarkIndex] = entry
+		} else {
+			s.state.Bookmarks = append([]HistoryEntry{entry}, s.state.Bookmarks...)
+		}
+	}); err != nil {
 		return nil, err
 	}
 	return copyHistory(s.state.Bookmarks), nil
@@ -171,16 +173,16 @@ func (s *Store) RemoveBookmark(id string) ([]HistoryEntry, error) {
 		return nil, err
 	}
 
-	index := s.bookmarkIndexLocked(id)
-	if index >= 0 {
-		s.state.Bookmarks = append(s.state.Bookmarks[:index], s.state.Bookmarks[index+1:]...)
-	}
+	if err := s.updateAndSaveLocked(func() {
+		index := s.bookmarkIndexLocked(id)
+		if index >= 0 {
+			s.state.Bookmarks = append(s.state.Bookmarks[:index], s.state.Bookmarks[index+1:]...)
+		}
 
-	if historyIndex := s.historyIndexLocked(id); historyIndex >= 0 {
-		s.state.History[historyIndex].Bookmarked = false
-	}
-
-	if err := s.saveLocked(); err != nil {
+		if historyIndex := s.historyIndexLocked(id); historyIndex >= 0 {
+			s.state.History[historyIndex].Bookmarked = false
+		}
+	}); err != nil {
 		return nil, err
 	}
 	return copyHistory(s.state.Bookmarks), nil
@@ -201,17 +203,17 @@ func (s *Store) AddFavoriteFolder(path string) ([]FavoriteFolder, error) {
 		return nil, err
 	}
 
-	entry := FavoriteFolder{
-		ID:   makeID("folder"),
-		Path: normalizedPath,
-	}
-	if index := s.favoriteFolderIndexByPathLocked(normalizedPath); index >= 0 {
-		entry = s.state.FavoriteFolders[index]
-		s.state.FavoriteFolders = append(s.state.FavoriteFolders[:index], s.state.FavoriteFolders[index+1:]...)
-	}
-	s.state.FavoriteFolders = append([]FavoriteFolder{entry}, s.state.FavoriteFolders...)
-
-	if err := s.saveLocked(); err != nil {
+	if err := s.updateAndSaveLocked(func() {
+		entry := FavoriteFolder{
+			ID:   makeID("folder"),
+			Path: normalizedPath,
+		}
+		if index := s.favoriteFolderIndexByPathLocked(normalizedPath); index >= 0 {
+			entry = s.state.FavoriteFolders[index]
+			s.state.FavoriteFolders = append(s.state.FavoriteFolders[:index], s.state.FavoriteFolders[index+1:]...)
+		}
+		s.state.FavoriteFolders = append([]FavoriteFolder{entry}, s.state.FavoriteFolders...)
+	}); err != nil {
 		return nil, err
 	}
 	return copyFavoriteFolders(s.state.FavoriteFolders), nil
@@ -238,11 +240,11 @@ func (s *Store) RemoveFavoriteFolder(id string) ([]FavoriteFolder, error) {
 		return nil, err
 	}
 
-	if index := s.favoriteFolderIndexByIDLocked(id); index >= 0 {
-		s.state.FavoriteFolders = append(s.state.FavoriteFolders[:index], s.state.FavoriteFolders[index+1:]...)
-	}
-
-	if err := s.saveLocked(); err != nil {
+	if err := s.updateAndSaveLocked(func() {
+		if index := s.favoriteFolderIndexByIDLocked(id); index >= 0 {
+			s.state.FavoriteFolders = append(s.state.FavoriteFolders[:index], s.state.FavoriteFolders[index+1:]...)
+		}
+	}); err != nil {
 		return nil, err
 	}
 	return copyFavoriteFolders(s.state.FavoriteFolders), nil
@@ -273,6 +275,21 @@ func (s *Store) loadLocked() error {
 	}
 
 	s.loaded = true
+	return nil
+}
+
+// updateAndSaveLocked は、現在状態のコピーに変更を適用して永続化する。
+// 保存に失敗した場合は、呼び出し前のメモリ状態を復元する。
+// 呼び出し元はmuを保持していなければならない。
+func (s *Store) updateAndSaveLocked(update func()) error {
+	previousState := s.state
+	s.state = cloneAppState(s.state)
+	update()
+
+	if err := s.saveLocked(); err != nil {
+		s.state = previousState
+		return err
+	}
 	return nil
 }
 
@@ -341,18 +358,70 @@ func (s *Store) favoriteFolderIndexByPathLocked(path string) int {
 	return -1
 }
 
-// copyHistory は、HistoryEntryスライスの浅いコピーを作る。
-// 現在のHistoryEntryが参照型フィールドを変更しない前提で、Storeの配列境界を保護する。
+// cloneAppState は、更新中の変更が元の状態へ波及しないよう、参照型フィールドを含めて複製する。
+func cloneAppState(state AppState) AppState {
+	return AppState{
+		History:         cloneHistory(state.History),
+		Bookmarks:       cloneHistory(state.Bookmarks),
+		FavoriteFolders: cloneFavoriteFolders(state.FavoriteFolders),
+	}
+}
+
+// cloneHistory は、HistoryEntryとその検索条件スライスを複製する。
+// nilスライスはnilのまま保ち、ロールバック前後の状態を一致させる。
+func cloneHistory(entries []HistoryEntry) []HistoryEntry {
+	if entries == nil {
+		return nil
+	}
+
+	cloned := make([]HistoryEntry, len(entries))
+	for index, entry := range entries {
+		cloned[index] = entry
+		cloned[index].Request.Extensions = cloneStrings(entry.Request.Extensions)
+		cloned[index].Request.ExcludedFileNames = cloneStrings(entry.Request.ExcludedFileNames)
+		cloned[index].Request.ExcludedExtensions = cloneStrings(entry.Request.ExcludedExtensions)
+	}
+	return cloned
+}
+
+// cloneFavoriteFolders は、お気に入りフォルダーのスライスをnilを保って複製する。
+func cloneFavoriteFolders(entries []FavoriteFolder) []FavoriteFolder {
+	if entries == nil {
+		return nil
+	}
+
+	cloned := make([]FavoriteFolder, len(entries))
+	copy(cloned, entries)
+	return cloned
+}
+
+// cloneStrings は、文字列スライスをnilを保って複製する。
+func cloneStrings(values []string) []string {
+	if values == nil {
+		return nil
+	}
+
+	cloned := make([]string, len(values))
+	copy(cloned, values)
+	return cloned
+}
+
+// copyHistory は、呼び出し元の変更からStore内部を守るため、HistoryEntryを深く複製する。
+// JSON応答がnullにならないよう、nilの入力には空スライスを返す。
 func copyHistory(entries []HistoryEntry) []HistoryEntry {
-	copied := make([]HistoryEntry, len(entries))
-	copy(copied, entries)
+	copied := cloneHistory(entries)
+	if copied == nil {
+		return []HistoryEntry{}
+	}
 	return copied
 }
 
 // copyFavoriteFolders は、お気に入りフォルダースライスのコピーを作る。
 func copyFavoriteFolders(entries []FavoriteFolder) []FavoriteFolder {
-	copied := make([]FavoriteFolder, len(entries))
-	copy(copied, entries)
+	copied := cloneFavoriteFolders(entries)
+	if copied == nil {
+		return []FavoriteFolder{}
+	}
 	return copied
 }
 

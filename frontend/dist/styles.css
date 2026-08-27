@@ -352,27 +352,6 @@ h2 {
   justify-content: flex-end;
 }
 
-/* お気に入りフォルダーは通常条件の直下で、選択、登録、解除を一続きに配置する。 */
-.favorite-folders {
-  grid-column: 1 / -1;
-  display: grid;
-  grid-template-columns: max-content minmax(280px, 1fr) max-content max-content;
-  gap: 6px 8px;
-  align-items: center;
-  border-top: 1px solid var(--line);
-  padding-top: 10px;
-}
-
-.favorite-folder-label {
-  color: var(--muted);
-  font-size: 12px;
-  font-weight: 600;
-}
-
-.favorite-folders .field-help {
-  grid-column: 2 / -1;
-}
-
 /* 除外条件は折りたたみ可能な全幅行とし、通常の検索条件を簡潔に保つ。 */
 .advanced-search {
   grid-column: 1 / -1;
@@ -749,6 +728,32 @@ tbody tr:hover {
   margin-bottom: 12px;
 }
 
+.section-description {
+  margin-top: 5px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+/* お気に入りの登録フォームは一覧から分離し、入力と保存操作を一つのカードへまとめる。 */
+.favorite-folder-form {
+  display: grid;
+  grid-template-columns: minmax(320px, 1fr) max-content;
+  gap: 12px;
+  align-items: end;
+  margin-bottom: 18px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  padding: 14px;
+  box-shadow: var(--shadow);
+}
+
+.favorite-folder-path {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 /* 保存済み検索は、カード間に一定の間隔を持つ一列一覧として表示する。 */
 .saved-list {
   display: grid;
@@ -805,7 +810,6 @@ tbody tr:hover {
     grid-template-areas:
       "path query extensions max"
       "controls controls actions actions"
-      "favorites favorites favorites favorites"
       "advanced advanced advanced advanced";
   }
 
@@ -831,10 +835,6 @@ tbody tr:hover {
 
   .actions {
     grid-area: actions;
-  }
-
-  .favorite-folders {
-    grid-area: favorites;
   }
 
   .advanced-search {
@@ -885,7 +885,6 @@ tbody tr:hover {
       "query extensions"
       "controls controls"
       "max actions"
-      "favorites favorites"
       "advanced advanced";
   }
 
@@ -893,13 +892,12 @@ tbody tr:hover {
     justify-content: flex-start;
   }
 
-  .favorite-folders {
-    grid-template-columns: minmax(0, 1fr) max-content max-content;
+  .favorite-folder-form {
+    grid-template-columns: minmax(0, 1fr);
   }
 
-  .favorite-folder-label,
-  .favorite-folders .field-help {
-    grid-column: 1 / -1;
+  .favorite-folder-form > button {
+    justify-self: start;
   }
 
 }

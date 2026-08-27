@@ -17,7 +17,7 @@
   <body>
     <!-- アプリ全体は、固定ヘッダーと選択中パネルの2行グリッドで構成する。 -->
     <main class="app-shell">
-      <!-- ヘッダーはアプリ名、処理状態、検索・履歴・ブックマークのタブを保持する。 -->
+      <!-- ヘッダーはアプリ名、処理状態、検索・お気に入り・履歴・ブックマークのタブを保持する。 -->
       <header class="topbar">
         <div>
           <h1>Folder Search Lite</h1>
@@ -30,6 +30,7 @@
           </div>
           <nav class="tabs" role="tablist" aria-label="ビュー">
             <button id="searchTab" class="tab-button active" type="button" role="tab" aria-selected="true" aria-controls="searchPanel" data-tab="search">検索</button>
+            <button id="favoritesTab" class="tab-button" type="button" role="tab" aria-selected="false" aria-controls="favoritesPanel" data-tab="favorites">お気に入り</button>
             <button id="historyTab" class="tab-button" type="button" role="tab" aria-selected="false" aria-controls="historyPanel" data-tab="history">履歴</button>
             <button id="bookmarksTab" class="tab-button" type="button" role="tab" aria-selected="false" aria-controls="bookmarksPanel" data-tab="bookmarks">ブックマーク</button>
           </nav>
@@ -44,9 +45,10 @@
           <label class="field path-field">
             <span>フォルダ</span>
             <div class="input-row">
-              <input id="rootPath" name="rootPath" type="text" autocomplete="off" placeholder="C:\Projects\sample" />
+              <input id="rootPath" name="rootPath" type="text" list="favoriteFolderOptions" autocomplete="off" placeholder="パスを入力、またはお気に入りから選択" />
               <button id="browseButton" class="secondary" type="button">参照</button>
             </div>
+            <datalist id="favoriteFolderOptions"></datalist>
           </label>
 
           <label class="field query-field">
@@ -78,17 +80,6 @@
             <button id="searchButton" type="submit">検索</button>
             <button id="cancelSearchButton" class="secondary" type="button" disabled>中断</button>
             <button id="bookmarkCurrentButton" class="secondary" type="button" disabled>保存</button>
-          </div>
-
-          <!-- よく使う検索ルートを永続化し、フォルダーダイアログを開かずに再選択できるようにする。 -->
-          <div class="favorite-folders">
-            <label class="favorite-folder-label" for="favoriteFolderSelect">お気に入りフォルダー</label>
-            <select id="favoriteFolderSelect" aria-describedby="favoriteFolderHelp">
-              <option value="">登録なし</option>
-            </select>
-            <button id="addFavoriteFolderButton" class="secondary" type="button" disabled>現在のフォルダーを登録</button>
-            <button id="removeFavoriteFolderButton" class="secondary danger" type="button" disabled>解除</button>
-            <span id="favoriteFolderHelp" class="field-help">選択すると検索対象のフォルダーへ反映します。</span>
           </div>
 
           <!-- 使用頻度の低い除外条件は、必要なときだけ展開できる詳細領域へまとめる。 -->
@@ -161,6 +152,29 @@
             <tbody id="resultsBody"></tbody>
           </table>
         </div>
+      </section>
+
+      <!-- お気に入りパネルは、検索フォームから独立してフォルダーの登録と解除を管理する。 -->
+      <section id="favoritesPanel" class="panel" role="tabpanel" aria-labelledby="favoritesTab">
+        <div class="section-toolbar">
+          <div>
+            <h2>お気に入りフォルダー</h2>
+            <p class="section-description">よく検索するフォルダーを保存すると、検索タブの一覧から選択できます。</p>
+          </div>
+        </div>
+
+        <form id="favoriteFolderForm" class="favorite-folder-form">
+          <label class="field">
+            <span>登録するフォルダー</span>
+            <div class="input-row">
+              <input id="favoriteFolderPath" name="favoriteFolderPath" type="text" autocomplete="off" placeholder="C:\Projects\sample" />
+              <button id="browseFavoriteFolderButton" class="secondary" type="button">参照</button>
+            </div>
+          </label>
+          <button id="addFavoriteFolderButton" type="submit" disabled>お気に入りに保存</button>
+        </form>
+
+        <div id="favoriteFolderList" class="saved-list" aria-live="polite"></div>
       </section>
 
       <!-- 履歴パネルは、過去の検索条件の再実行、保存、全削除を提供する。 -->

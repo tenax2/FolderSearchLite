@@ -24,8 +24,10 @@ classDiagram
         +highlightText(value, query, caseSensitive) string
         +refreshSavedLists() Promise
         +renderFavoriteFolders() void
+        +renderFavoriteFolderList() void
         +addFavoriteFolder() Promise
-        +removeFavoriteFolder() Promise
+        +removeFavoriteFolder(id) Promise
+        +useFavoriteFolder(id) void
         +switchTab(tabName) void
     }
 
@@ -94,6 +96,7 @@ classDiagram
         +GetFavoriteFolders() FavoriteFolder[]
         +RemoveFavoriteFolder(id string) FavoriteFolder[]
         -loadLocked() error
+        -updateAndSaveLocked() error
         -saveLocked() error
     }
 
@@ -205,7 +208,7 @@ classDiagram
     FrontendController ..> SearchResponse : 描画
     FrontendController ..> FilePreviewRequest : 構築
     FrontendController ..> FilePreview : 描画
-    FrontendController ..> FavoriteFolder : 選択肢を描画
+    FrontendController ..> FavoriteFolder : 選択肢と管理一覧を描画
     App *-- Store : 所有
     App ..> SearchEngine : 検索実行
     App ..> SearchRequest

@@ -396,6 +396,9 @@ JSONが不正な場合は呼び出し元へエラーを返す。
 3. `state.json.tmp`へ`0600`で書く。
 4. `os.Rename`で`state.json`を置き換える。
 
+更新は現在状態のコピーに適用する。
+ディレクトリ作成、JSON変換、一時ファイル書き込み、または置き換えに失敗した場合は、メモリ状態を更新前に戻してエラーを返す。
+
 すべての公開操作は、読み込み、メモリ更新、保存、戻り値コピーが完了するまでミューテックスを保持する。
 
 ### 履歴
@@ -459,7 +462,8 @@ Windowsでは大文字と小文字を区別せず、それ以外のOSでは区�
 | タブ | `.tab-button`, `.panel` | 選択状態と表示パネルを切り替える。 |
 | 検索条件 | `#rootPath`から`#maxResults`、`#advancedSearch` | `SearchRequest`を構築し、除外条件を必要なときだけ展開する。 |
 | 検索操作 | `#searchButton`, `#cancelSearchButton`, `#bookmarkCurrentButton` | 検索、中断、保存を行う。 |
-| お気に入り | `#favoriteFolderSelect`, `#addFavoriteFolderButton`, `#removeFavoriteFolderButton` | 検索フォルダーの選択、登録、解除を行う。 |
+| フォルダー入力候補 | `#rootPath`, `#favoriteFolderOptions` | 一つのテキスト入力でパスの手入力とお気に入り候補の選択を受け付ける。 |
+| お気に入り管理 | `#favoriteFolderForm`, `#favoriteFolderPath`, `#favoriteFolderList` | フォルダーの登録、検索フォームへの反映、解除を行う。 |
 | 結果統計 | `#resultSummary`, `#scanSummary` | 表示件数と走査件数を表示する。 |
 | 結果 | `#resultsBody` | 動的な結果行を保持する。 |
 | フィルター | `.column-filter`, `#clearFiltersButton` | 表示結果を列別に絞り込む。 |
@@ -489,13 +493,18 @@ Windowsでは大文字と小文字を区別せず、それ以外のOSでは区�
 ### お気に入りフォルダー操作
 
 `refreshSavedLists`は履歴、ブックマーク、お気に入りフォルダーを並行取得する。
-`renderFavoriteFolders`は保存済みパスを`option.textContent`へ設定し、現在の選択IDまたは入力パスと一致する項目を復元する。
+`renderFavoriteFolders`は保存済みパスを`favoriteFolderOptions`内の`option.value`へ設定する。
+同じ関数は`renderFavoriteFolderList`を呼び、お気に入り管理タブのカード一覧も同期する。
 
-一覧の変更時は選択項目のパスを`rootPath`へ反映するが、検索は自動実行しない。
-パスの手入力またはフォルダー参照時も、一致するお気に入りがあれば選択状態を同期する。
+`rootPath`は`datalist`へ接続した一つのテキスト入力である。
+利用者はパスを手入力するか、お気に入り候補を選択する。
+候補の選択では検索を自動実行しない。
 
-登録後はバックエンドが返した先頭項目の正規化済みパスとIDを入力・選択へ反映する。
-解除後も`rootPath`は維持し、お気に入り一覧だけを再描画する。
+管理タブの登録フォームは手入力とフォルダー参照を受け付ける。
+登録後はバックエンドが返した先頭項目の正規化済みパスを管理用入力へ反映し、選択肢と管理一覧を再描画する。
+
+管理一覧の「検索で使う」はパスを`rootPath`へ反映し、検索タブへ切り替える。
+解除後も`rootPath`は維持し、選択肢と管理一覧だけを再描画する。
 
 ### 一致語の強調表示
 
@@ -560,7 +569,7 @@ Windowsでは大文字と小文字を区別せず、それ以外のOSでは区�
 ファイル名、パス、本文プレビュー、履歴ラベルは`escapeHtml`を通す。
 強調表示も一致区間と非一致区間をエスケープした後で、実装側が生成する`mark`要素だけを追加する。
 
-お気に入りフォルダーのパスはHTML文字列へ連結せず、`option.textContent`で設定する。
+お気に入りフォルダーのパスはHTML文字列へ連結せず、DOM APIで`option.value`へ設定する。
 
 `data-*`属性へ入れる値は`escapeAttribute`を通し、HTML特殊文字とバッククォートを置換する。
 
@@ -577,40 +586,39 @@ Windowsでは大文字と小文字を区別せず、それ以外のOSでは区�
 | `data-rerun` | 保存済み要求をフォームへ復元して再検索する。 |
 | `data-bookmark` | 履歴をブックマークする。 |
 | `data-remove-bookmark` | ブックマークを解除する。 |
+| `data-use-favorite` | お気に入りを検索フォームへ反映して検索タブを開く。 |
+| `data-remove-favorite` | お気に入り登録を解除する。 |
 
 ## レスポンシブCSS
 
 ### 1400px超
 
-通常の検索フォームは次の6列であり、お気に入りと詳細条件はそれぞれ下の全幅行へ配置する。
+通常の検索フォームは次の6列であり、詳細条件は下の全幅行へ配置する。
 
 ```text
 フォルダ | 文字列 | 拡張子 | チェック項目 | 上限 | 操作
-お気に入りフォルダー
 詳細条件（除外ファイル名、除外拡張子）
 ```
 
 ### 1081px以上1400px以下
 
-CSS Gridの領域名を使って次の4行へ配置する。
+CSS Gridの領域名を使って次の3行へ配置する。
 
 ```text
 path     | query    | extensions | max
 controls | controls | actions    | actions
-favorites| favorites| favorites  | favorites
 advanced | advanced | advanced   | advanced
 ```
 
 ### 1080px以下
 
-ヘッダーを縦積みにし、フォームを次の6行へ配置する。
+ヘッダーを縦積みにし、フォームを次の5行へ配置する。
 
 ```text
 path     | path
 query    | extensions
 controls | controls
 max      | actions
-favorites| favorites
 advanced | advanced
 ```
 

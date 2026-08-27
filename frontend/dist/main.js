@@ -78,6 +78,7 @@ const elements = {
   tabButtons: [...document.querySelectorAll(".tab-button")],
   panels: {
     search: document.querySelector("#searchPanel"),
+    favorites: document.querySelector("#favoritesPanel"),
     history: document.querySelector("#historyPanel"),
     bookmarks: document.querySelector("#bookmarksPanel"),
   },
@@ -95,9 +96,12 @@ const elements = {
   caseSensitive: document.querySelector("#caseSensitive"),
   maxResults: document.querySelector("#maxResults"),
   browseButton: document.querySelector("#browseButton"),
-  favoriteFolderSelect: document.querySelector("#favoriteFolderSelect"),
+  favoriteFolderOptions: document.querySelector("#favoriteFolderOptions"),
+  favoriteFolderForm: document.querySelector("#favoriteFolderForm"),
+  favoriteFolderPath: document.querySelector("#favoriteFolderPath"),
+  browseFavoriteFolderButton: document.querySelector("#browseFavoriteFolderButton"),
   addFavoriteFolderButton: document.querySelector("#addFavoriteFolderButton"),
-  removeFavoriteFolderButton: document.querySelector("#removeFavoriteFolderButton"),
+  favoriteFolderList: document.querySelector("#favoriteFolderList"),
   searchButton: document.querySelector("#searchButton"),
   cancelSearchButton: document.querySelector("#cancelSearchButton"),
   bookmarkCurrentButton: document.querySelector("#bookmarkCurrentButton"),
@@ -118,7 +122,6 @@ const elements = {
 };
 
 const THEME_STORAGE_KEY = "folder-search-lite-theme";
-const FAVORITE_PATHS_CASE_INSENSITIVE = /Windows/i.test(navigator.userAgent);
 
 /**
  * 指定テーマを画面へ反映し、切替ボタンの押下状態を同期する。
@@ -183,7 +186,7 @@ function setStatus(message) {
 
 /**
  * 検索実行中フラグと関連ボタンの活性状態を同期する。
- * 二重実行を防ぐため検索ボタンと参照ボタンを無効化し、中断ボタンだけを有効化する。
+ * 二重実行を防ぐため検索ボタン、参照ボタン、お気に入り操作を無効化し、中断ボタンだけを有効化する。
  *
  * @param {boolean} searching 検索処理が進行中ならtrue。
  * @returns {void}
@@ -290,90 +293,92 @@ function applyRequest(request) {
   elements.includeOfficeDocuments.checked = request.includeOfficeDocuments !== false;
   elements.caseSensitive.checked = Boolean(request.caseSensitive);
   elements.maxResults.value = request.maxResults || 500;
-  syncFavoriteFolderSelection();
-  updateFavoriteFolderControls();
 }
 
 /**
- * 二つのパスが、お気に入り選択を同期できる同じ表記かを判定する。
- * Windowsの通常利用に合わせて大文字と小文字を区別しない。
+ * お気に入りフォルダーを検索用フォルダ入力の候補と管理タブの一覧へ描画する。
+ * datalistのoptionと管理カードはDOM APIで構築し、保存済みパスをHTMLとして解釈しない。
  *
- * @param {unknown} left 比較する一つ目のパス。
- * @param {unknown} right 比較する二つ目のパス。
- * @returns {boolean} 前後空白を除いたパス表記が一致する場合はtrue。
- */
-function sameFavoriteFolderPath(left, right) {
-  const leftPath = String(left ?? "").trim();
-  const rightPath = String(right ?? "").trim();
-  if (FAVORITE_PATHS_CASE_INSENSITIVE) {
-    return leftPath.toLowerCase() === rightPath.toLowerCase();
-  }
-  return leftPath === rightPath;
-}
-
-/**
- * お気に入りフォルダーを選択肢へ描画し、可能なら指定IDまたは現在の入力パスを選択する。
- * optionはDOM APIで構築し、保存済みパスをHTMLとして解釈しない。
- *
- * @param {string} preferredID 描画後も選択するお気に入りID。
  * @returns {void}
  */
-function renderFavoriteFolders(preferredID = elements.favoriteFolderSelect.value) {
-  elements.favoriteFolderSelect.replaceChildren();
-
-  const placeholder = document.createElement("option");
-  placeholder.value = "";
-  placeholder.textContent = state.favoriteFolders.length ? "お気に入りから選択" : "登録なし";
-  elements.favoriteFolderSelect.append(placeholder);
+function renderFavoriteFolders() {
+  elements.favoriteFolderOptions.replaceChildren();
 
   for (const favorite of state.favoriteFolders) {
     const option = document.createElement("option");
-    option.value = favorite.id;
-    option.textContent = favorite.path;
-    elements.favoriteFolderSelect.append(option);
+    option.value = favorite.path;
+    elements.favoriteFolderOptions.append(option);
   }
 
-  const preferredExists = state.favoriteFolders.some((favorite) => favorite.id === preferredID);
-  if (preferredExists) {
-    elements.favoriteFolderSelect.value = preferredID;
-  } else {
-    syncFavoriteFolderSelection();
-  }
+  renderFavoriteFolderList();
   updateFavoriteFolderControls();
 }
 
 /**
- * 現在の検索フォルダーと同じお気に入りがあれば選択状態へ同期する。
+ * お気に入り管理タブへ、検索フォームへの反映と登録解除ができるカードを描画する。
  *
  * @returns {void}
  */
-function syncFavoriteFolderSelection() {
-  const favorite = state.favoriteFolders.find((entry) =>
-    sameFavoriteFolderPath(entry.path, elements.rootPath.value),
-  );
-  elements.favoriteFolderSelect.value = favorite?.id || "";
+function renderFavoriteFolderList() {
+  elements.favoriteFolderList.replaceChildren();
+  if (!state.favoriteFolders.length) {
+    const empty = document.createElement("div");
+    empty.className = "empty";
+    empty.textContent = "お気に入りフォルダーはまだ登録されていません";
+    elements.favoriteFolderList.append(empty);
+    return;
+  }
+
+  for (const favorite of state.favoriteFolders) {
+    const item = document.createElement("article");
+    item.className = "saved-item favorite-folder-item";
+
+    const path = document.createElement("div");
+    path.className = "saved-title favorite-folder-path";
+    path.textContent = favorite.path;
+
+    const actions = document.createElement("div");
+    actions.className = "saved-actions";
+
+    const useButton = document.createElement("button");
+    useButton.className = "secondary";
+    useButton.type = "button";
+    useButton.dataset.useFavorite = favorite.id;
+    useButton.textContent = "検索で使う";
+
+    const removeButton = document.createElement("button");
+    removeButton.className = "secondary danger";
+    removeButton.type = "button";
+    removeButton.dataset.removeFavorite = favorite.id;
+    removeButton.textContent = "解除";
+
+    actions.append(useButton, removeButton);
+    item.append(path, actions);
+    elements.favoriteFolderList.append(item);
+  }
 }
 
 /**
- * 検索状態、パス入力、お気に入り件数と選択値から関連コントロールの活性状態を決める。
+ * 検索状態と管理タブの入力値から、お気に入り管理コントロールの活性状態を決める。
  *
  * @returns {void}
  */
 function updateFavoriteFolderControls() {
-  const hasFavorites = state.favoriteFolders.length > 0;
-  elements.favoriteFolderSelect.disabled = state.searching || !hasFavorites;
-  elements.addFavoriteFolderButton.disabled = state.searching || !elements.rootPath.value.trim();
-  elements.removeFavoriteFolderButton.disabled = state.searching || !elements.favoriteFolderSelect.value;
+  elements.browseFavoriteFolderButton.disabled = state.searching;
+  elements.addFavoriteFolderButton.disabled = state.searching || !elements.favoriteFolderPath.value.trim();
+  for (const button of elements.favoriteFolderList.querySelectorAll("button")) {
+    button.disabled = state.searching;
+  }
 }
 
 /**
- * 現在の検索フォルダーをバックエンドで検証し、お気に入りへ登録する。
- * 正規化済みパスを入力欄へ戻し、登録した項目を選択状態にする。
+ * お気に入り管理タブへ入力したフォルダーをバックエンドで検証して保存する。
+ * 正規化済みパスを管理用入力欄へ戻し、検索フォームの選択肢と管理一覧を更新する。
  *
  * @returns {Promise<void>}
  */
 async function addFavoriteFolder() {
-  const path = elements.rootPath.value.trim();
+  const path = elements.favoriteFolderPath.value.trim();
   if (!path) {
     setStatus("お気に入りへ登録するフォルダーを入力してください");
     return;
@@ -384,35 +389,53 @@ async function addFavoriteFolder() {
     state.favoriteFolders = (await callBackend("AddFavoriteFolder", path)) || [];
     const favorite = state.favoriteFolders[0];
     if (favorite) {
-      elements.rootPath.value = favorite.path;
+      elements.favoriteFolderPath.value = favorite.path;
     }
-    renderFavoriteFolders(favorite?.id || "");
+    renderFavoriteFolders();
     setStatus(previousIDs.has(favorite?.id)
-      ? "登録済みのお気に入りフォルダーを選択しました"
-      : "お気に入りフォルダーへ登録しました");
+      ? "登録済みのお気に入りフォルダーを先頭へ移動しました"
+      : "お気に入りフォルダーへ保存しました");
   } catch (error) {
     setStatus(errorMessage(error));
   }
 }
 
 /**
- * 選択中のお気に入りフォルダーを解除する。検索フォルダー入力自体は維持する。
+ * 指定したお気に入りフォルダーを解除する。検索フォルダー入力自体は維持する。
  *
+ * @param {string} id 解除するお気に入りID。
  * @returns {Promise<void>}
  */
-async function removeFavoriteFolder() {
-  const id = elements.favoriteFolderSelect.value;
+async function removeFavoriteFolder(id) {
   if (!id) {
     return;
   }
 
   try {
     state.favoriteFolders = (await callBackend("RemoveFavoriteFolder", id)) || [];
-    renderFavoriteFolders("");
+    renderFavoriteFolders();
     setStatus("お気に入りフォルダーを解除しました");
   } catch (error) {
     setStatus(errorMessage(error));
   }
+}
+
+/**
+ * 指定したお気に入りを検索フォームへ反映し、検索タブへ切り替える。
+ *
+ * @param {string} id 使用するお気に入りID。
+ * @returns {void}
+ */
+function useFavoriteFolder(id) {
+  const favorite = state.favoriteFolders.find((entry) => entry.id === id);
+  if (!favorite) {
+    return;
+  }
+
+  elements.rootPath.value = favorite.path;
+  switchTab("search");
+  updateFavoriteFolderControls();
+  setStatus("お気に入りからフォルダーを選択しました");
 }
 
 /**
@@ -889,7 +912,7 @@ function renderSavedList(container, entries, options) {
  * 表示中のタブとtabpanelを指定名へ切り替える。
  * 見た目のactiveクラスとアクセシビリティ用aria-selectedを同時に更新する。
  *
- * @param {"search"|"history"|"bookmarks"} tabName 表示するタブ名。
+ * @param {"search"|"favorites"|"history"|"bookmarks"} tabName 表示するタブ名。
  * @returns {void}
  */
 function switchTab(tabName) {
@@ -1167,8 +1190,6 @@ elements.browseButton.addEventListener("click", async () => {
     const folder = await callBackend("BrowseFolder");
     if (folder) {
       elements.rootPath.value = folder;
-      syncFavoriteFolderSelection();
-      updateFavoriteFolderControls();
       setStatus("フォルダを選択しました");
     }
   } catch (error) {
@@ -1176,25 +1197,24 @@ elements.browseButton.addEventListener("click", async () => {
   }
 });
 
-// 手入力したパスとお気に入り選択を同期し、空入力時は登録操作を無効化する。
-elements.rootPath.addEventListener("input", () => {
-  syncFavoriteFolderSelection();
-  updateFavoriteFolderControls();
+// お気に入り管理タブでは手入力とフォルダーダイアログのどちらからでも登録できる。
+elements.favoriteFolderPath.addEventListener("input", updateFavoriteFolderControls);
+elements.favoriteFolderForm.addEventListener("submit", (event) => {
+  event.preventDefault();
+  addFavoriteFolder();
 });
-
-// お気に入りを選ぶと、フォルダーダイアログを介さず検索対象へ反映する。
-elements.favoriteFolderSelect.addEventListener("change", () => {
-  const favorite = state.favoriteFolders.find(
-    (entry) => entry.id === elements.favoriteFolderSelect.value,
-  );
-  if (favorite) {
-    elements.rootPath.value = favorite.path;
-    setStatus("お気に入りからフォルダーを選択しました");
+elements.browseFavoriteFolderButton.addEventListener("click", async () => {
+  try {
+    const folder = await callBackend("BrowseFolder");
+    if (folder) {
+      elements.favoriteFolderPath.value = folder;
+      updateFavoriteFolderControls();
+      setStatus("登録するフォルダーを選択しました");
+    }
+  } catch (error) {
+    setStatus(errorMessage(error));
   }
-  updateFavoriteFolderControls();
 });
-elements.addFavoriteFolderButton.addEventListener("click", addFavoriteFolder);
-elements.removeFavoriteFolderButton.addEventListener("click", removeFavoriteFolder);
 
 // 直近検索の保存操作は、履歴IDの検証をbookmarkCurrentへ委譲する。
 elements.bookmarkCurrentButton.addEventListener("click", bookmarkCurrent);
@@ -1304,6 +1324,18 @@ document.addEventListener("click", async (event) => {
       switchTab("search");
       runSearch(entry.request);
     }
+    return;
+  }
+
+  const useFavoriteId = target.dataset.useFavorite;
+  if (useFavoriteId) {
+    useFavoriteFolder(useFavoriteId);
+    return;
+  }
+
+  const removeFavoriteId = target.dataset.removeFavorite;
+  if (removeFavoriteId) {
+    removeFavoriteFolder(removeFavoriteId);
     return;
   }
 

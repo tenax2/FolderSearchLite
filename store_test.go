@@ -3,8 +3,119 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 )
+
+// TestStoreMutationsRollbackStateWhenSaveFails は、各更新APIが永続化エラーを返したときに、
+// 保存されていない変更をStoreのメモリ状態に残さないことを確認する。
+func TestStoreMutationsRollbackStateWhenSaveFails(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	existingFavoritePath := filepath.Join(root, "existing-favorite")
+	newFavoritePath := filepath.Join(root, "new-favorite")
+	for _, path := range []string{existingFavoritePath, newFavoritePath} {
+		if err := os.Mkdir(path, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// 保存先の親パスを通常ファイルにし、MkdirAllを確実に失敗させる。
+	blockingPath := filepath.Join(root, "save-blocker")
+	if err := os.WriteFile(blockingPath, []byte("not a directory"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	statePath := filepath.Join(blockingPath, "state.json")
+
+	initialState := func() AppState {
+		return AppState{
+			History: []HistoryEntry{
+				{
+					ID:         "history-bookmarked",
+					Bookmarked: true,
+					Request: SearchRequest{
+						Extensions:         []string{"txt"},
+						ExcludedFileNames:  []string{"ignored.txt"},
+						ExcludedExtensions: []string{"tmp"},
+					},
+				},
+				{ID: "history-plain"},
+			},
+			Bookmarks: []HistoryEntry{
+				{ID: "history-bookmarked", Bookmarked: true},
+			},
+			FavoriteFolders: []FavoriteFolder{
+				{ID: "favorite-existing", Path: existingFavoritePath},
+			},
+		}
+	}
+
+	tests := []struct {
+		name   string
+		update func(*Store) error
+	}{
+		{
+			name: "add history",
+			update: func(store *Store) error {
+				return store.AddHistory(HistoryEntry{ID: "history-new"})
+			},
+		},
+		{
+			name: "clear history",
+			update: func(store *Store) error {
+				_, err := store.ClearHistory()
+				return err
+			},
+		},
+		{
+			name: "bookmark history",
+			update: func(store *Store) error {
+				_, err := store.BookmarkHistory("history-plain")
+				return err
+			},
+		},
+		{
+			name: "remove bookmark",
+			update: func(store *Store) error {
+				_, err := store.RemoveBookmark("history-bookmarked")
+				return err
+			},
+		},
+		{
+			name: "add favorite folder",
+			update: func(store *Store) error {
+				_, err := store.AddFavoriteFolder(newFavoritePath)
+				return err
+			},
+		},
+		{
+			name: "remove favorite folder",
+			update: func(store *Store) error {
+				_, err := store.RemoveFavoriteFolder("favorite-existing")
+				return err
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			store := &Store{
+				path:   statePath,
+				state:  initialState(),
+				loaded: true,
+			}
+			want := initialState()
+
+			if err := test.update(store); err == nil {
+				t.Fatal("expected the state save to fail")
+			}
+			if !reflect.DeepEqual(store.state, want) {
+				t.Fatalf("state changed after a failed save\nwant: %#v\n got: %#v", want, store.state)
+			}
+		})
+	}
+}
 
 // TestFavoriteFolderLifecyclePersistsAndDeduplicates は、お気に入りフォルダーの
 // 登録順、重複排除、再読み込み、解除が一つの状態ファイルで維持されることを確認する。
