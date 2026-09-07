@@ -324,6 +324,21 @@ h2 {
   gap: 8px;
 }
 
+/* 検索ルートは、入力、参照、お気に入り切替を一つの操作列として並べる。 */
+.search-folder-input {
+  grid-template-columns: minmax(0, 1fr) auto auto;
+}
+
+.favorite-toggle {
+  min-width: 116px;
+  white-space: nowrap;
+}
+
+.favorite-toggle[aria-pressed="true"] {
+  border-color: var(--warn);
+  color: var(--warn);
+}
+
 /* チェックボックスは3列2行を基本とし、ラベルの途中改行を禁止する。 */
 .controls {
   display: grid;

@@ -44,9 +44,10 @@
           <!-- 検索ルートは手入力とOS標準フォルダ選択の両方に対応する。 -->
           <label class="field path-field">
             <span>フォルダ</span>
-            <div class="input-row">
+            <div class="input-row search-folder-input">
               <input id="rootPath" name="rootPath" type="text" list="favoriteFolderOptions" autocomplete="off" placeholder="パスを入力、またはお気に入りから選択" />
               <button id="browseButton" class="secondary" type="button">参照</button>
+              <button id="toggleFavoriteFolderButton" class="secondary favorite-toggle" type="button" aria-pressed="false" title="入力中のフォルダーをお気に入りに登録" disabled>☆ お気に入り</button>
             </div>
             <datalist id="favoriteFolderOptions"></datalist>
           </label>

@@ -96,6 +96,7 @@ const elements = {
   caseSensitive: document.querySelector("#caseSensitive"),
   maxResults: document.querySelector("#maxResults"),
   browseButton: document.querySelector("#browseButton"),
+  toggleFavoriteFolderButton: document.querySelector("#toggleFavoriteFolderButton"),
   favoriteFolderOptions: document.querySelector("#favoriteFolderOptions"),
   favoriteFolderForm: document.querySelector("#favoriteFolderForm"),
   favoriteFolderPath: document.querySelector("#favoriteFolderPath"),
@@ -293,6 +294,47 @@ function applyRequest(request) {
   elements.includeOfficeDocuments.checked = request.includeOfficeDocuments !== false;
   elements.caseSensitive.checked = Boolean(request.caseSensitive);
   elements.maxResults.value = request.maxResults || 500;
+  updateFavoriteFolderControls();
+}
+
+/**
+ * お気に入りの照合用にパス表記を揃える。
+ * Windows形式のパスは区切り文字、末尾区切り、大文字小文字の差を無視する。
+ * それ以外のパスは、大文字小文字を維持して比較する。
+ *
+ * @param {unknown} value 比較するフォルダーパス。
+ * @returns {string} 画面内の照合に使うパス文字列。
+ */
+function favoriteFolderPathKey(value) {
+  let path = String(value ?? "").trim();
+  const isWindowsPath = /^[a-z]:[\\/]/i.test(path) || /^\\\\/.test(path);
+  if (isWindowsPath) {
+    path = path.replaceAll("\\", "/");
+    const isDriveRoot = /^[a-z]:\/$/i.test(path);
+    while (!isDriveRoot && path.length > 1 && path.endsWith("/")) {
+      path = path.slice(0, -1);
+    }
+    return path.toLocaleLowerCase("en-US");
+  }
+
+  while (path.length > 1 && path.endsWith("/")) {
+    path = path.slice(0, -1);
+  }
+  return path;
+}
+
+/**
+ * 入力中の検索ルートと同じお気に入りを返す。
+ *
+ * @param {string} path 検索ルートの入力値。
+ * @returns {Object|undefined} 一致するお気に入り。未登録ならundefined。
+ */
+function findFavoriteFolderByPath(path) {
+  const key = favoriteFolderPathKey(path);
+  if (!key) {
+    return undefined;
+  }
+  return state.favoriteFolders.find((favorite) => favoriteFolderPathKey(favorite.path) === key);
 }
 
 /**
@@ -364,10 +406,55 @@ function renderFavoriteFolderList() {
  * @returns {void}
  */
 function updateFavoriteFolderControls() {
+  const rootPath = elements.rootPath.value.trim();
+  const currentFavorite = findFavoriteFolderByPath(rootPath);
+
+  elements.toggleFavoriteFolderButton.disabled = state.searching || !rootPath;
+  elements.toggleFavoriteFolderButton.setAttribute("aria-pressed", String(Boolean(currentFavorite)));
+  elements.toggleFavoriteFolderButton.textContent = currentFavorite ? "★ 登録済み" : "☆ お気に入り";
+  elements.toggleFavoriteFolderButton.title = currentFavorite
+    ? "入力中のフォルダーをお気に入りから解除"
+    : "入力中のフォルダーをお気に入りに登録";
   elements.browseFavoriteFolderButton.disabled = state.searching;
   elements.addFavoriteFolderButton.disabled = state.searching || !elements.favoriteFolderPath.value.trim();
   for (const button of elements.favoriteFolderList.querySelectorAll("button")) {
     button.disabled = state.searching;
+  }
+}
+
+/**
+ * 検索フォームへ入力中のフォルダーをお気に入りへ登録し、登録済みなら解除する。
+ * バックエンドが返す正規化済みパスと最新一覧を検索フォーム、候補、管理タブへ同期する。
+ *
+ * @returns {Promise<void>}
+ */
+async function toggleCurrentFavoriteFolder() {
+  const path = elements.rootPath.value.trim();
+  if (!path || state.searching) {
+    if (!path) {
+      setStatus("お気に入りへ登録するフォルダーを入力してください");
+    }
+    return;
+  }
+
+  elements.toggleFavoriteFolderButton.disabled = true;
+  const currentFavorite = findFavoriteFolderByPath(path);
+  try {
+    if (currentFavorite) {
+      state.favoriteFolders = (await callBackend("RemoveFavoriteFolder", currentFavorite.id)) || [];
+      setStatus("お気に入りフォルダーを解除しました");
+    } else {
+      state.favoriteFolders = (await callBackend("AddFavoriteFolder", path)) || [];
+      const addedFavorite = state.favoriteFolders[0];
+      if (addedFavorite) {
+        elements.rootPath.value = addedFavorite.path;
+      }
+      setStatus("お気に入りフォルダーへ保存しました");
+    }
+    renderFavoriteFolders();
+  } catch (error) {
+    setStatus(errorMessage(error));
+    updateFavoriteFolderControls();
   }
 }
 
@@ -925,6 +1012,11 @@ function switchTab(tabName) {
   for (const [name, panel] of Object.entries(elements.panels)) {
     panel.classList.toggle("active", name === tabName);
   }
+
+  if (tabName === "favorites" && !elements.favoriteFolderPath.value.trim()) {
+    elements.favoriteFolderPath.value = elements.rootPath.value.trim();
+  }
+  updateFavoriteFolderControls();
 }
 
 /**
@@ -1190,12 +1282,18 @@ elements.browseButton.addEventListener("click", async () => {
     const folder = await callBackend("BrowseFolder");
     if (folder) {
       elements.rootPath.value = folder;
+      updateFavoriteFolderControls();
       setStatus("フォルダを選択しました");
     }
   } catch (error) {
     setStatus(errorMessage(error));
   }
 });
+
+// 検索ルートの入力に合わせて登録状態を表示し、星ボタン一つで登録と解除を切り替える。
+elements.rootPath.addEventListener("input", updateFavoriteFolderControls);
+elements.rootPath.addEventListener("change", updateFavoriteFolderControls);
+elements.toggleFavoriteFolderButton.addEventListener("click", toggleCurrentFavoriteFolder);
 
 // お気に入り管理タブでは手入力とフォルダーダイアログのどちらからでも登録できる。
 elements.favoriteFolderPath.addEventListener("input", updateFavoriteFolderControls);
